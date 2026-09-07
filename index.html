@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+<title>KRUNKER CLONE — Browser FPS</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230d1017'/%3E%3Ctext x='16' y='23' font-family='Arial' font-size='20' font-weight='bold' text-anchor='middle' fill='%23ffcc00'%3EK%3C/text%3E%3C/svg%3E" />
+<link rel="stylesheet" href="./css/style.css" />
+<script type="importmap">
+{ "imports": { "three": "./libs/three.module.js" } }
+</script>
+</head>
+<body>
+
+<!-- ================= 3D CANVAS ================= -->
+<canvas id="game-canvas"></canvas>
+
+<!-- ================= LOADING ================= -->
+<div id="loading" class="overlay">
+  <div class="logo">KR<span>U</span>NKER</div>
+  <div class="loadbar"><div id="loadbar-fill"></div></div>
+  <div id="loadtext" class="dim">Lade Engine…</div>
+</div>
+
+<!-- ================= HUD ================= -->
+<div id="hud" class="hidden">
+
+  <div id="crosshair">
+    <div class="ch ch-t"></div><div class="ch ch-b"></div>
+    <div class="ch ch-l"></div><div class="ch ch-r"></div>
+    <div class="ch-dot"></div>
+  </div>
+  <div id="hitmarker"><span>&#10006;</span></div>
+  <div id="scope" class="hidden"><div class="scope-ring"></div><div class="scope-h"></div><div class="scope-v"></div></div>
+
+  <div id="dmg-dirs"></div>
+  <div id="dmg-vignette"></div>
+  <div id="popups"></div>
+
+  <div id="hud-bl">
+    <div class="statline">
+      <div class="stat-ico hp">HP</div>
+      <div class="bar-wrap"><div id="hp-bar-ghost"></div><div id="hp-bar"></div><span id="hp-text">100</span></div>
+    </div>
+    <div class="statline" id="armor-line">
+      <div class="stat-ico ap">AP</div>
+      <div class="bar-wrap small"><div id="ap-bar"></div><span id="ap-text">0</span></div>
+    </div>
+  </div>
+
+  <div id="hud-br">
+    <div id="wpn-name">ASSAULT RIFLE</div>
+    <div id="ammo">
+      <span id="ammo-mag">30</span><span class="slash">/</span><span id="ammo-res">90</span>
+    </div>
+    <div id="reload-hint" class="hidden">[R] NACHLADEN</div>
+    <div id="reload-bar-wrap" class="hidden"><div id="reload-bar"></div></div>
+  </div>
+
+  <div id="slots">
+    <div class="slot" data-slot="0"><b>1</b><span>PRIMARY</span></div>
+    <div class="slot" data-slot="1"><b>2</b><span>SECONDARY</span></div>
+    <div class="slot" data-slot="2"><b>3</b><span>MELEE</span></div>
+    <div class="slot nade" data-slot="3"><b>G</b><span id="nade-count">2</span></div>
+  </div>
+
+  <div id="killfeed"></div>
+
+  <div id="matchbar">
+    <div class="team t-red"><span id="score-red">0</span></div>
+    <div id="timer">10:00</div>
+    <div class="team t-blue"><span id="score-blue">0</span></div>
+  </div>
+
+  <div id="toasts"></div>
+
+  <div id="minimap-wrap"><canvas id="minimap" width="230" height="230"></canvas></div>
+
+  <div id="hud-tl">
+    <div id="ks-line" class="hidden"><span id="ks-count">0</span> KILLSTREAK</div>
+    <div id="stat-line">K <b id="st-k">0</b> &middot; D <b id="st-d">0</b> &middot; SCORE <b id="st-s">0</b></div>
+  </div>
+</div>
+
+<!-- ================= SCOREBOARD ================= -->
+<div id="scoreboard" class="hidden">
+  <div class="sb-card">
+    <div class="sb-head"><span id="sb-mode">TEAM DEATHMATCH</span><span id="sb-map">SANDSTORM</span></div>
+    <div class="sb-teams">
+      <div class="sb-team red">
+        <div class="sb-team-head">ROT <span id="sb-red-score">0</span></div>
+        <div class="sb-cols"><span>SPIELER</span><span>K</span><span>D</span><span>SCORE</span><span>PING</span></div>
+        <div id="sb-red-list"></div>
+      </div>
+      <div class="sb-team blue">
+        <div class="sb-team-head">BLAU <span id="sb-blue-score">0</span></div>
+        <div class="sb-cols"><span>SPIELER</span><span>K</span><span>D</span><span>SCORE</span><span>PING</span></div>
+        <div id="sb-blue-list"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= MAIN MENU ================= -->
+<div id="menu" class="overlay hidden">
+  <div class="menu-bg"></div>
+  <div class="menu-inner">
+    <div class="logo small">KR<span>U</span>NKER <em>CLONE</em></div>
+
+    <div class="menu-tabs">
+      <button class="tab active" data-tab="play">SPIELEN</button>
+      <button class="tab" data-tab="class">KLASSEN</button>
+      <button class="tab" data-tab="settings">EINSTELLUNGEN</button>
+      <button class="tab" data-tab="controls">STEUERUNG</button>
+    </div>
+
+    <div class="tabpane active" id="pane-play">
+      <div class="play-grid">
+        <div class="pcard">
+          <label>SPIELERNAME</label>
+          <input id="opt-name" type="text" maxlength="16" value="Player" />
+          <label>SPIELMODUS</label>
+          <select id="opt-mode">
+            <option value="tdm">Team Deathmatch</option>
+            <option value="ffa">Free For All</option>
+          </select>
+          <label>KARTE</label>
+          <select id="opt-map">
+            <option value="sandstorm">Sandstorm</option>
+            <option value="burg">Burg</option>
+            <option value="citadel">Citadel</option>
+          </select>
+        </div>
+        <div class="pcard">
+          <label>BOTS <b id="lbl-bots">9</b></label>
+          <input id="opt-bots" type="range" min="1" max="15" value="9" />
+          <label>BOT-SCHWIERIGKEIT <b id="lbl-diff">Normal</b></label>
+          <input id="opt-diff" type="range" min="0" max="3" value="1" />
+          <label>PUNKTELIMIT <b id="lbl-limit">40</b></label>
+          <input id="opt-limit" type="range" min="10" max="100" step="5" value="40" />
+          <label>ZEITLIMIT <b id="lbl-time">10 min</b></label>
+          <input id="opt-time" type="range" min="3" max="20" value="10" />
+        </div>
+      </div>
+      <button id="btn-play" class="big-btn">SPIEL STARTEN</button>
+    </div>
+
+    <div class="tabpane" id="pane-class">
+      <div class="class-layout">
+        <div id="class-grid"></div>
+        <div id="class-detail"></div>
+      </div>
+    </div>
+
+    <div class="tabpane" id="pane-settings">
+      <div class="set-grid" id="settings-grid"></div>
+      <button id="btn-reset-settings" class="small-btn">Auf Standard zur&uuml;cksetzen</button>
+    </div>
+
+    <div class="tabpane" id="pane-controls">
+      <div class="ctrl-grid">
+        <div><kbd>W A S D</kbd><span>Bewegen</span></div>
+        <div><kbd>MAUS</kbd><span>Umsehen</span></div>
+        <div><kbd>LINKSKLICK</kbd><span>Schie&szlig;en</span></div>
+        <div><kbd>RECHTSKLICK</kbd><span>Zielen / Zoom</span></div>
+        <div><kbd>LEERTASTE</kbd><span>Springen (Doppelsprung je nach Klasse)</span></div>
+        <div><kbd>SHIFT</kbd><span>Sprinten</span></div>
+        <div><kbd>STRG / C</kbd><span>Ducken &middot; beim Sprint = Slide</span></div>
+        <div><kbd>R</kbd><span>Nachladen</span></div>
+        <div><kbd>1 2 3</kbd><span>Waffe wechseln</span></div>
+        <div><kbd>Q</kbd><span>Letzte Waffe</span></div>
+        <div><kbd>F</kbd><span>Nahkampf-Schlag</span></div>
+        <div><kbd>G</kbd><span>Granate werfen</span></div>
+        <div><kbd>TAB</kbd><span>Rangliste</span></div>
+        <div><kbd>ESC</kbd><span>Pause / Men&uuml;</span></div>
+        <div><kbd>V</kbd><span>Kamera: 1st / 3rd Person</span></div>
+        <div><kbd>P</kbd><span>Performance-Anzeige</span></div>
+      </div>
+      <p class="dim tip">Tipp: Springen + seitliches Strafen ohne Vorw&auml;rtstaste beschleunigt dich (Bunny-Hop / Air-Strafe) &mdash; genau wie im Original.</p>
+    </div>
+  </div>
+</div>
+
+<!-- ================= PAUSE ================= -->
+<div id="pause" class="overlay hidden">
+  <div class="pause-card">
+    <h2>PAUSE</h2>
+    <button id="btn-resume" class="big-btn">WEITERSPIELEN</button>
+    <button id="btn-settings-ingame" class="small-btn">EINSTELLUNGEN</button>
+    <button id="btn-quit" class="small-btn danger">MATCH VERLASSEN</button>
+  </div>
+</div>
+
+<!-- ================= RESPAWN ================= -->
+<div id="deathscreen" class="hidden">
+  <div class="death-inner">
+    <div class="death-title">DU WURDEST ELIMINIERT</div>
+    <div id="death-by"></div>
+    <div class="death-timer">Respawn in <span id="respawn-t">3.0</span>s</div>
+  </div>
+</div>
+
+<!-- ================= MATCH END ================= -->
+<div id="endscreen" class="overlay hidden">
+  <div class="end-card">
+    <div id="end-title">MATCH BEENDET</div>
+    <div id="end-sub"></div>
+    <div id="end-board"></div>
+    <div class="end-btns">
+      <button id="btn-again" class="big-btn">NOCHMAL SPIELEN</button>
+      <button id="btn-tomenu" class="small-btn">ZUM MEN&Uuml;</button>
+    </div>
+  </div>
+</div>
+
+<div id="perf" class="hidden"></div>
+<div id="click-hint" class="hidden">KLICKEN ZUM SPIELEN</div>
+
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>

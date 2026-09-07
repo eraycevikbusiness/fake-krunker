@@ -1,0 +1,13 @@
+{
+  "name": "krunker-clone",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Browser-FPS im Krunker-Stil mit Bots, Waffen und Klassen",
+  "scripts": {
+    "start": "node serve.mjs"
+  },
+  "dependencies": {
+    "puppeteer": "^25.10.0"
+  }
+}
