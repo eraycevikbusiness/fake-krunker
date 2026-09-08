@@ -283,7 +283,7 @@ export class Effects {
     this.blasts = [];
     for (let i = 0; i < 8; i++) {
       const mat = new THREE.MeshBasicMaterial({
-        color: 0xffaa33, transparent: true, opacity: 0.8,
+        color: new THREE.Color(2.4, 1.5, 0.5), transparent: true, opacity: 0.8,
         blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false,
       });
       const m = new THREE.Mesh(this.blastGeo, mat);
@@ -300,6 +300,7 @@ export class Effects {
       const mat = new THREE.MeshBasicMaterial({
         map: this.flashTex, transparent: true, blending: THREE.AdditiveBlending,
         depthWrite: false, toneMapped: false, side: THREE.DoubleSide,
+        color: new THREE.Color(1.5, 1.35, 1.1),
       });
       const m = new THREE.Mesh(this.flashGeo, mat);
       m.visible = false;
@@ -331,7 +332,7 @@ export class Effects {
     this._v.set(dx / len, dy / len, dz / len);
     m.quaternion.setFromUnitVectors(this._fwd, this._v);
     m.scale.set(width || 0.05, width || 0.05, len);
-    m.material.color.setHex(color || 0xffe08a);
+    m.material.color.setHex(color || 0xffe08a).multiplyScalar(2.6);   // HDR -> leuchtet im Bloom
     m.material.opacity = 0.85;
     t.life = t.maxLife = 0.055 + len * 0.0006;
   }

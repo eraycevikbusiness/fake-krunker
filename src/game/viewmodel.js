@@ -1,50 +1,35 @@
 // ============================================================
 // Ego-Waffenansicht (eigene Szene -> kein Clipping durch Waende)
 //
-// Aufbau: root (Sway/Bob/Rueckstoss/Animationen)
-//           -> mesh  (Waffe als EIN Mesh, Haltungsrotation, Massstab)
-//           -> armR / armL (Unterarme, per Mini-IK von der Schulter zum Griff)
-// Jede Waffe bringt Griffpunkte (grips) und eine Haltung (hold/vmPos/vmRot)
-// mit. Messer und Katana haben eigene Schlag-Animationen (Kurven).
+// root (Sway/Bob/Rueckstoss/Animation)
+//   -> mesh   (Waffe als EIN PBR-Mesh, Haltungsrotation)
+//   -> armR/armL (Unterarme, Mini-IK von der Schulter zum Griff)
+//   -> flash + light (Muendungsfeuer + kurzes Punktlicht)
+// Messer und Katana werden mit der Klinge nach oben gehalten
+// (CS:GO/Valorant); Schlaege, Stiche, Zueck-Animationen sind Kurven.
 // ============================================================
 
 import * as THREE from 'three';
 import { clamp, damp, lerp, rand } from '../core/utils.js';
 import { settings } from '../core/settings.js';
-import { mergeBoxes, MAT_VC } from './character.js';
+import { mergeBoxes } from '../fx/geom.js';
+import { makePropMaterial } from '../fx/materials.js';
 
-// Massstab des Waffenmodells in der Egoansicht. Ohne Verkleinerung
-// stehen die hinteren Teile fast in der Kamera -> extreme Perspektive.
 const VM_SCALE = 0.53;
+const MELEE_SCALE = 0.80;
 
-// Standard-Ablage der Waffe (Hueftposition) je Haltungstyp
 const HIP_POS = {
   rifle: [0.185, -0.155, -0.72], pistol: [0.145, -0.15, -0.62], akimbo: [0.0, -0.2, -0.62],
-  launcher: [0.21, -0.13, -0.62], knife: [0.27, -0.25, -0.50], katana: [0.22, -0.27, -0.46],
+  launcher: [0.21, -0.13, -0.62], knife: [0.30, -0.31, -0.52], katana: [0.30, -0.40, -0.58],
   nade: [0.2, -0.2, -0.5],
 };
 const ADS_Z = -0.74;
 
-// Hoehe der Visierlinie im Waffen-Koordinatensystem.
-// Beim Zielen wird die Waffe so verschoben, dass sie exakt auf der Bildmitte liegt.
-const SIGHT_Y = {
-  ar: 0.118, smg: 0.102, sniper: 0.146, shotgun: 0.108, lmg: 0.128,
-  marksman: 0.112, burst: 0.112, revolver: 0.078, pistol: 0.072,
-  rpg: 0.132, crossbow: 0.102, akimbo: 0.02,
-};
-
-// Schultern im Kameraraum (Kamera im Ursprung, Blick -Z). Sie liegen unter
-// und knapp vor der Kamera, damit der Unterarm schraeg nach unten verlaeuft
-// und nicht durch die Nahebene rauscht.
 const SHOULDER_R = new THREE.Vector3(0.42, -0.70, -0.04);
 const SHOULDER_L = new THREE.Vector3(-0.42, -0.70, -0.04);
-const SLEEVE_MAX = 0.40;                 // sichtbarer Unterarm, Rest ist ausserhalb des Bildes
-// Position der linken Hand, wenn die Waffe einhaendig gehalten wird
+const SLEEVE_MAX = 0.40;
 const FREE_HAND_L = new THREE.Vector3(-0.26, -0.36, -0.44);
-// Nahkampfwaffen etwas kleiner darstellen (sie sind lang und nah an der Kamera)
-const MELEE_SCALE = 0.80;
 
-// Magazin-Position (Waffenraum) fuer die Nachlade-Handbewegung
 const MAG_POINT = {
   rifle: [0, -0.36, -0.22], pistol: [0, -0.38, 0.02], akimbo: [0, -0.38, 0.02],
   launcher: [0.02, -0.06, -1.3],
@@ -63,102 +48,92 @@ function curve(t, keys) {
   }
   return keys[keys.length - 1][1];
 }
+const K = (px, py, pz, rx, ry, rz) => ({ px, py, pz, rx, ry, rz });
 
+// Alle Kurven sind Offsets auf die Ruhehaltung (Klinge zeigt nach oben).
 const SWINGS = {
-  // Messer: schneller Diagonalschnitt von oben rechts nach unten links
-  slash: {
-    px: [[0, 0], [0.2, 0.10], [0.55, -0.30], [1, 0]],
-    py: [[0, 0], [0.2, 0.08], [0.55, -0.10], [1, 0]],
-    pz: [[0, 0], [0.2, 0.05], [0.5, -0.28], [1, 0]],
-    rx: [[0, 0], [0.2, 0.35], [0.55, -0.45], [1, 0]],
-    ry: [[0, 0], [0.2, -0.55], [0.55, 0.75], [1, 0]],
-    rz: [[0, 0], [0.2, 0.25], [0.55, -0.95], [1, 0]],
-  },
-  // Messer, Rueckhand
-  slash2: {
-    px: [[0, 0], [0.2, -0.22], [0.55, 0.18], [1, 0]],
-    py: [[0, 0], [0.2, -0.06], [0.55, 0.06], [1, 0]],
-    pz: [[0, 0], [0.2, 0.04], [0.5, -0.26], [1, 0]],
-    rx: [[0, 0], [0.2, -0.2], [0.55, 0.25], [1, 0]],
-    ry: [[0, 0], [0.2, 0.6], [0.55, -0.55], [1, 0]],
-    rz: [[0, 0], [0.2, -0.6], [0.55, 0.55], [1, 0]],
-  },
-  // Katana: weiter horizontaler Schwung von rechts nach links
-  sweep: {
-    px: [[0, 0], [0.25, 0.18], [0.6, -0.42], [1, 0]],
-    py: [[0, 0], [0.25, 0.10], [0.6, -0.06], [1, 0]],
-    pz: [[0, 0], [0.25, 0.10], [0.6, -0.30], [1, 0]],
-    rx: [[0, 0], [0.25, 0.25], [0.6, -0.15], [1, 0]],
-    ry: [[0, 0], [0.25, -0.75], [0.6, 1.05], [1, 0]],
-    rz: [[0, 0], [0.25, 0.30], [0.6, -0.85], [1, 0]],
-  },
-  // Katana: Ueberkopfhieb
-  sweep2: {
-    px: [[0, 0], [0.25, 0.05], [0.6, -0.10], [1, 0]],
-    py: [[0, 0], [0.25, 0.24], [0.6, -0.22], [1, 0]],
-    pz: [[0, 0], [0.25, 0.12], [0.6, -0.34], [1, 0]],
-    rx: [[0, 0], [0.25, 0.95], [0.6, -0.80], [1, 0]],
-    ry: [[0, 0], [0.25, 0.10], [0.6, 0.35], [1, 0]],
-    rz: [[0, 0], [0.25, -0.25], [0.6, 0.15], [1, 0]],
-  },
+  // Messer: schneller Schnitt von oben rechts nach unten links
+  slash: K(
+    [[0, 0], [0.18, 0.08], [0.5, -0.30], [1, 0]],
+    [[0, 0], [0.18, 0.06], [0.5, -0.14], [1, 0]],
+    [[0, 0], [0.18, 0.06], [0.45, -0.26], [1, 0]],
+    [[0, 0], [0.18, 0.30], [0.5, -1.45], [0.7, -1.2], [1, 0]],
+    [[0, 0], [0.18, -0.40], [0.5, 0.75], [1, 0]],
+    [[0, 0], [0.18, 0.25], [0.5, -0.90], [1, 0]]),
+  // Messer: Rueckhand von links nach rechts
+  slash2: K(
+    [[0, 0], [0.18, -0.24], [0.5, 0.16], [1, 0]],
+    [[0, 0], [0.18, -0.02], [0.5, -0.10], [1, 0]],
+    [[0, 0], [0.18, 0.04], [0.45, -0.26], [1, 0]],
+    [[0, 0], [0.18, 0.20], [0.5, -1.35], [0.7, -1.1], [1, 0]],
+    [[0, 0], [0.18, 0.55], [0.5, -0.55], [1, 0]],
+    [[0, 0], [0.18, -0.55], [0.5, 0.60], [1, 0]]),
+  // Messer: schwerer Stich (Rechtsklick)
+  stab: K(
+    [[0, 0], [0.3, 0.08], [0.5, -0.20], [0.7, -0.18], [1, 0]],
+    [[0, 0], [0.3, -0.04], [0.5, 0.02], [1, 0]],
+    [[0, 0], [0.3, 0.22], [0.5, -0.60], [0.7, -0.52], [1, 0]],
+    [[0, 0], [0.3, -0.55], [0.5, -1.25], [0.7, -1.2], [1, 0]],
+    [[0, 0], [0.3, -0.25], [0.5, 0.42], [0.7, 0.4], [1, 0]],
+    [[0, 0], [0.3, 0.35], [0.5, -0.10], [1, 0]]),
+  // Katana: horizontaler Schwung von rechts nach links
+  sweep: K(
+    [[0, 0], [0.22, 0.16], [0.55, -0.48], [1, 0]],
+    [[0, 0], [0.22, 0.06], [0.55, -0.10], [1, 0]],
+    [[0, 0], [0.22, 0.10], [0.5, -0.32], [1, 0]],
+    [[0, 0], [0.22, -0.30], [0.55, -1.35], [0.75, -1.1], [1, 0]],
+    [[0, 0], [0.22, -0.80], [0.55, 1.15], [1, 0]],
+    [[0, 0], [0.22, 0.30], [0.55, -0.60], [1, 0]]),
+  // Katana: Rueckhand von links nach rechts
+  sweep2: K(
+    [[0, 0], [0.22, -0.34], [0.55, 0.20], [1, 0]],
+    [[0, 0], [0.22, 0.02], [0.55, -0.12], [1, 0]],
+    [[0, 0], [0.22, 0.08], [0.5, -0.32], [1, 0]],
+    [[0, 0], [0.22, -0.40], [0.55, -1.30], [0.75, -1.05], [1, 0]],
+    [[0, 0], [0.22, 0.85], [0.55, -0.95], [1, 0]],
+    [[0, 0], [0.22, -0.45], [0.55, 0.55], [1, 0]]),
+  // Katana: Ueberkopfhieb (Rechtsklick)
+  overhead: K(
+    [[0, 0], [0.35, 0.12], [0.58, -0.10], [1, 0]],
+    [[0, 0], [0.35, 0.30], [0.58, -0.34], [0.75, -0.28], [1, 0]],
+    [[0, 0], [0.35, 0.14], [0.58, -0.50], [0.75, -0.42], [1, 0]],
+    [[0, 0], [0.35, 0.45], [0.58, -2.05], [0.75, -1.85], [1, 0]],
+    [[0, 0], [0.35, 0.15], [0.58, 0.20], [1, 0]],
+    [[0, 0], [0.35, -0.30], [0.58, 0.15], [1, 0]]),
   // Kolbenschlag mit Schusswaffe
-  bash: {
-    px: [[0, 0], [0.3, 0.06], [0.55, -0.14], [1, 0]],
-    py: [[0, 0], [0.3, -0.04], [0.55, 0.02], [1, 0]],
-    pz: [[0, 0], [0.3, 0.12], [0.55, -0.40], [1, 0]],
-    rx: [[0, 0], [0.3, 0.30], [0.55, -0.60], [1, 0]],
-    ry: [[0, 0], [0.3, -0.20], [0.55, 0.25], [1, 0]],
-    rz: [[0, 0], [0.3, 0.30], [0.55, 0.80], [1, 0]],
-  },
+  bash: K(
+    [[0, 0], [0.3, 0.06], [0.55, -0.14], [1, 0]],
+    [[0, 0], [0.3, -0.04], [0.55, 0.02], [1, 0]],
+    [[0, 0], [0.3, 0.12], [0.55, -0.40], [1, 0]],
+    [[0, 0], [0.3, 0.30], [0.55, -0.60], [1, 0]],
+    [[0, 0], [0.3, -0.20], [0.55, 0.25], [1, 0]],
+    [[0, 0], [0.3, 0.30], [0.55, 0.80], [1, 0]]),
   // Granatenwurf
-  throw: {
-    px: [[0, 0], [0.3, 0.12], [0.6, -0.05], [1, 0]],
-    py: [[0, 0], [0.3, 0.14], [0.6, -0.06], [1, 0]],
-    pz: [[0, 0], [0.3, 0.16], [0.6, -0.30], [1, 0]],
-    rx: [[0, 0], [0.3, 0.55], [0.6, -0.40], [1, 0]],
-    ry: [[0, 0], [0.3, -0.25], [0.6, 0.15], [1, 0]],
-    rz: [[0, 0], [0.3, 0.20], [0.6, -0.20], [1, 0]],
-  },
-};
-
-// Schwere Angriffe (Rechtsklick)
-SWINGS.stab = {      // Messer: Stich nach vorn, Spitze zur Bildmitte
-  px: [[0, 0], [0.3, 0.10], [0.55, -0.24], [0.72, -0.20], [1, 0]],
-  py: [[0, 0], [0.3, -0.06], [0.55, 0.03], [1, 0]],
-  pz: [[0, 0], [0.3, 0.24], [0.55, -0.58], [0.72, -0.50], [1, 0]],
-  rx: [[0, 0], [0.3, -0.25], [0.55, 0.12], [1, 0]],
-  ry: [[0, 0], [0.3, -0.35], [0.55, 0.60], [0.72, 0.55], [1, 0]],
-  rz: [[0, 0], [0.3, 0.45], [0.55, -0.15], [1, 0]],
-};
-SWINGS.overhead = {  // Katana: hoch ausholen, mit Wucht herunterschlagen
-  px: [[0, 0], [0.35, 0.14], [0.58, -0.12], [1, 0]],
-  py: [[0, 0], [0.35, 0.34], [0.58, -0.30], [0.75, -0.24], [1, 0]],
-  pz: [[0, 0], [0.35, 0.16], [0.58, -0.42], [0.75, -0.36], [1, 0]],
-  rx: [[0, 0], [0.35, 1.30], [0.58, -0.90], [0.75, -0.70], [1, 0]],
-  ry: [[0, 0], [0.35, 0.25], [0.58, 0.30], [1, 0]],
-  rz: [[0, 0], [0.35, -0.35], [0.58, 0.25], [1, 0]],
+  throw: K(
+    [[0, 0], [0.3, 0.12], [0.6, -0.05], [1, 0]],
+    [[0, 0], [0.3, 0.14], [0.6, -0.06], [1, 0]],
+    [[0, 0], [0.3, 0.16], [0.6, -0.30], [1, 0]],
+    [[0, 0], [0.3, 0.55], [0.6, -0.40], [1, 0]],
+    [[0, 0], [0.3, -0.25], [0.6, 0.15], [1, 0]],
+    [[0, 0], [0.3, 0.20], [0.6, -0.20], [1, 0]]),
 };
 
 // Zueck-Animationen (t: 0 -> 1)
 const EQUIP = {
-  raise: {
-    px: [[0, 0.04], [1, 0]], py: [[0, -0.42], [1, 0]], pz: [[0, 0.06], [1, 0]],
-    rx: [[0, 0.95], [1, 0]], ry: [[0, -0.30], [1, 0]], rz: [[0, 0.35], [1, 0]],
-  },
-  // Messer kommt von unten und ueberschlaegt sich sichtbar in der Hand (Valorant-Stil)
-  flip: {
-    px: [[0, -0.06], [0.5, -0.08], [1, 0]], py: [[0, -0.08], [0.45, 0.08], [1, 0]], pz: [[0, -0.08], [0.5, -0.12], [1, 0]],
-    rx: [[0, -0.15], [0.7, 0.10], [1, 0]], ry: [[0, 0.25], [1, 0]], rz: [[0, 0.35], [0.7, -0.08], [1, 0]],
-    spin: [[0, -6.28], [0.72, -0.10], [1, 0]],
-  },
-  // Katana wird von der Huefte gezogen: Klinge liegt erst quer im unteren Bild,
-  // schwingt dann mit Schwung nach oben in die Kampfstellung
-  unsheathe: {
-    px: [[0, -0.08], [0.5, 0.0], [1, 0]], py: [[0, -0.26], [0.5, -0.20], [1, 0]], pz: [[0, 0.0], [1, 0]],
-    rx: [[0, -0.15], [0.5, -0.05], [0.85, 0.14], [1, 0]],
-    ry: [[0, -1.15], [0.5, -0.90], [0.82, 0.26], [1, 0]],
-    rz: [[0, 0.45], [0.55, 0.30], [1, 0]],
-  },
+  raise: K(
+    [[0, 0.04], [1, 0]], [[0, -0.42], [1, 0]], [[0, 0.06], [1, 0]],
+    [[0, 0.95], [1, 0]], [[0, -0.30], [1, 0]], [[0, 0.35], [1, 0]]),
+  // Messer kommt von unten und ueberschlaegt sich in der Hand (Valorant-Stil)
+  flip: Object.assign(K(
+    [[0, -0.06], [0.5, -0.08], [1, 0]], [[0, -0.10], [0.45, 0.06], [1, 0]], [[0, -0.08], [0.5, -0.12], [1, 0]],
+    [[0, -0.10], [0.7, 0.08], [1, 0]], [[0, 0.20], [1, 0]], [[0, 0.30], [0.7, -0.06], [1, 0]]),
+    { spin: [[0, -6.28], [0.72, -0.10], [1, 0]] }),
+  // Katana wird gezogen: liegt erst quer, schwingt dann nach oben in die Haltung
+  unsheathe: K(
+    [[0, -0.08], [0.5, 0.0], [1, 0]], [[0, -0.22], [0.5, -0.16], [1, 0]], [[0, 0.0], [1, 0]],
+    [[0, -1.05], [0.5, -0.85], [0.85, 0.10], [1, 0]],
+    [[0, -0.95], [0.5, -0.75], [0.82, 0.22], [1, 0]],
+    [[0, 0.40], [0.55, 0.28], [1, 0]]),
 };
 
 const RELOAD = {
@@ -179,19 +154,20 @@ export class ViewModel {
   constructor(scene) {
     this.scene = scene;
 
-    this.root = new THREE.Group();          // Sway / Bob / Rueckstoss / Animation
+    this.root = new THREE.Group();
     scene.add(this.root);
 
+    this.mat = makePropMaterial({ envMapIntensity: 0.55 });
     this.weapon = null;
     this.mesh = null;
     this.armR = null;
     this.armL = null;
     this.skin = 0;
 
-    // Muendungsfeuer
+    // Muendungsfeuer + Licht
     const flashGeo = new THREE.PlaneGeometry(1, 1);
     this.flashMat = new THREE.MeshBasicMaterial({
-      color: 0xffffff, transparent: true, opacity: 0,
+      color: new THREE.Color(2.4, 2.1, 1.6), transparent: true, opacity: 0,
       blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false,
       toneMapped: false, side: THREE.DoubleSide,
     });
@@ -200,16 +176,20 @@ export class ViewModel {
     this.flash.visible = false;
     this.root.add(this.flash);
     this.flashLife = 0;
+    this.light = new THREE.PointLight(0xffc27a, 0, 2.6, 2);
+    this.root.add(this.light);
+    this.lightT = 0;
 
-    // Animationszustand
     this.time = 0;
     this.bobPhase = 0;
     this.bob = new THREE.Vector3();
     this.sway = new THREE.Vector2();
     this.swayTarget = new THREE.Vector2();
+    this.velLag = 0;
     this.recoilPos = 0;
     this.recoilRot = 0;
     this.recoilRoll = 0;
+    this.recoilVel = 0;
     this.ads = 0;
     this.sprintT = 0;
     this.reloadT = 0;
@@ -222,7 +202,6 @@ export class ViewModel {
     this.swingKind = 'bash';
     this.swingSide = 0;
     this.equipKind = 'raise';
-    this.meshSpin = 0;
     this.hidden = false;
 
     this._basePos = new THREE.Vector3();
@@ -230,19 +209,17 @@ export class ViewModel {
     this._baseRot = new THREE.Euler();
     this._tmp = new THREE.Vector3();
     this._hand = new THREE.Vector3();
-    this._sh = new THREE.Vector3();
   }
 
-  // --------------------------------------------------------
   _buildArm(skin) {
     const g = new THREE.Group();
     const geo = mergeBoxes([
-      { x: 0, y: 0, z: 0.0, w: 0.085, h: 0.095, d: 0.13, color: skin },          // Hand
-      { x: 0, y: 0, z: 0.10, w: 0.10, h: 0.10, d: 0.05, color: 0x2a3040 },       // Manschette
-    ]);
-    const hand = new THREE.Mesh(geo, MAT_VC);
-    const sleeveGeo = mergeBoxes([{ x: 0, y: 0, z: 0.5, w: 0.09, h: 0.09, d: 1.0, color: 0x3b4152 }]);
-    const sleeve = new THREE.Mesh(sleeveGeo, MAT_VC);
+      { x: 0, y: 0, z: 0.0, w: 0.085, h: 0.095, d: 0.13, color: { c: skin, m: 0, r: 0.62 } },
+      { x: 0, y: 0, z: 0.10, w: 0.10, h: 0.10, d: 0.05, color: { c: 0x2a3040, m: 0.1, r: 0.8 } },
+    ], { chamfer: 0.012 });
+    const hand = new THREE.Mesh(geo, this.mat);
+    const sleeveGeo = mergeBoxes([{ x: 0, y: 0, z: 0.5, w: 0.09, h: 0.09, d: 1.0, color: { c: 0x3b4152, m: 0, r: 0.88 } }], { chamfer: 0.012 });
+    const sleeve = new THREE.Mesh(sleeveGeo, this.mat);
     sleeve.position.z = 0.1;
     g.add(hand, sleeve);
     g.userData.sleeve = sleeve;
@@ -269,7 +246,7 @@ export class ViewModel {
     }
 
     this.weapon = weapon;
-    this.mesh = new THREE.Mesh(mergeBoxes(weapon.parts || []), MAT_VC);
+    this.mesh = new THREE.Mesh(mergeBoxes(weapon.parts || [], { chamfer: 0.0045 }), this.mat);
     this.mesh.scale.setScalar(weapon.melee ? VM_SCALE * MELEE_SCALE : VM_SCALE);
     this.root.add(this.mesh);
 
@@ -279,14 +256,13 @@ export class ViewModel {
     const vr = weapon.vmRot || [0, 0, 0];
     this._baseRot.set(vr[0], vr[1], vr[2]);
 
-    // Visier auf Bildmitte: x = 0, y = -Visierhoehe * Massstab
-    const sy = weapon.sightY !== undefined ? weapon.sightY : (SIGHT_Y[weapon.id] !== undefined ? SIGHT_Y[weapon.id] : 0.11);
+    const sy = weapon.sightY !== undefined ? weapon.sightY : 0.11;
     this._adsPos.set(0, -sy * VM_SCALE, ADS_Z);
     this.equipKind = weapon.equip || 'raise';
 
-    // Das Muendungsfeuer haengt am ungescalten Knoten -> Position mitskalieren
     const mz = weapon.muzzle || [0, 0, -1];
     this.flash.position.set(mz[0] * VM_SCALE, mz[1] * VM_SCALE, (mz[2] - 0.05) * VM_SCALE);
+    this.light.position.copy(this.flash.position);
     this.flash.visible = false;
     this.flashLife = 0;
 
@@ -303,19 +279,16 @@ export class ViewModel {
   fire(strength) {
     const w = this.weapon;
     const s = strength === undefined ? 1 : strength;
-    this.recoilPos = Math.min(0.28, this.recoilPos + 0.055 * s * (w ? w.kick / 0.05 : 1) * 0.9);
-    this.recoilRot = Math.min(0.5, this.recoilRot + 0.09 * s * (w ? w.kick / 0.05 : 1) * 0.55);
-    this.recoilRoll += rand(-0.045, 0.045) * s;
+    const k = w ? w.kick / 0.05 : 1;
+    // Rueckstoss als Impuls auf eine Feder -> weicher Kick statt Sprung
+    this.recoilVel += 1.6 * s * k;
+    this.recoilRot = Math.min(0.5, this.recoilRot + 0.07 * s * k * 0.55);
+    this.recoilRoll += rand(-0.04, 0.04) * s;
 
-    // Muendungsfeuer
-    if (w && !w.melee && !w.projectile) {
-      this._showFlash(rand(0.22, 0.36));
-    } else if (w && w.projectile && w.id !== 'grenade') {
-      this._showFlash(rand(0.32, 0.5));
-    }
+    if (w && !w.melee && !w.projectile) this._showFlash(rand(0.22, 0.36));
+    else if (w && w.projectile && w.id !== 'grenade') this._showFlash(rand(0.32, 0.5));
   }
 
-  /** Nahkampf-Animation der aktuellen Waffe (oder Kolbenschlag / Wurf) */
   melee(kind, dur) {
     const w = this.weapon;
     let k = kind;
@@ -329,12 +302,11 @@ export class ViewModel {
     this.swingDur = dur || ((w && w.melee && w.swingTime) ? w.swingTime : 0.34);
     if (k === 'throw') this.swingDur = 0.45;
     this.swingT = this.swingDur;
-    this.switchT = 0;          // Zueck-Animation abbrechen
+    this.switchT = 0;
   }
 
-  /** Rueckschlag beim Nahkampf-Treffer */
   hitKick(heavy) {
-    this.recoilPos = Math.min(0.3, this.recoilPos + (heavy ? 0.14 : 0.08));
+    this.recoilVel += heavy ? 2.4 : 1.3;
     this.recoilRot = Math.max(-0.5, this.recoilRot - (heavy ? 0.22 : 0.10));
     this.recoilRoll += rand(-0.14, 0.14);
   }
@@ -345,13 +317,13 @@ export class ViewModel {
     this.flash.rotation.z = Math.random() * Math.PI * 2;
     this.flashMat.opacity = 1;
     this.flashLife = 0.045;
+    this.lightT = 1;
   }
 
   setFlashTexture(tex) { this.flashMat.map = tex; this.flashMat.needsUpdate = true; }
 
   setHidden(v) { this.hidden = v; this.root.visible = !v; }
 
-  /** Weltposition der Muendung in der VM-Szene */
   muzzleLocal(out) {
     const mz = this.weapon ? (this.weapon.muzzle || [0, 0, -1]) : [0, 0, -1];
     out.set(mz[0], mz[1], mz[2]);
@@ -360,8 +332,6 @@ export class ViewModel {
     return out.applyMatrix4(this.mesh.matrixWorld);
   }
 
-  // --------------------------------------------------------
-  /** Arm (Kind von root) auf eine Hand-Weltposition setzen und zur Schulter ausrichten */
   _placeArm(arm, handWorld, shoulderWorld) {
     _v.copy(handWorld);
     this.root.worldToLocal(_v);
@@ -378,7 +348,7 @@ export class ViewModel {
   }
 
   /**
-   * s: {adsTarget, moveSpeed, grounded, sprint, crouch, slide, firing, lookDX, lookDY, landImpact}
+   * s: {adsTarget, moveSpeed, grounded, sprint, crouch, slide, firing, lookDX, lookDY, velY, landImpact}
    */
   update(dt, s) {
     if (!this.weapon || !this.mesh) return;
@@ -391,24 +361,24 @@ export class ViewModel {
     const targetAds = s.adsTarget ? 1 : 0;
     this.ads += clamp(targetAds - this.ads, -dt * adsRate, dt * adsRate);
     this.ads = clamp(this.ads, 0, 1);
+    const adsK = w.melee ? 0 : this.ads;
 
     // ---- Sprint-Pose ----
     const sprinting = s.sprint && s.moveSpeed > 4 && s.grounded && !s.firing && this.ads < 0.05 && this.swingT <= 0;
     this.sprintT = damp(this.sprintT, sprinting ? 1 : 0, 11, dt);
 
-    // ---- Sway (Nahkampfwaffen reagieren traeger und staerker auf die Maus) ----
+    // ---- Sway (Nahkampfwaffen reagieren traeger und staerker) ----
     const swayMul = w.melee ? 2.4 : 1;
     const swayRate = w.melee ? 7 : 10;
     this.swayTarget.x = clamp(-(s.lookDX || 0) * 0.012 * swayMul, -0.09, 0.09);
     this.swayTarget.y = clamp((s.lookDY || 0) * 0.012 * swayMul, -0.09, 0.09);
     this.sway.x = damp(this.sway.x, this.swayTarget.x, swayRate, dt);
     this.sway.y = damp(this.sway.y, this.swayTarget.y, swayRate, dt);
-    // Vertikale Traegheit bei Sprung / Fall
     const velY = clamp((s.velY || 0) * 0.005, -0.07, 0.07) * (w.melee ? 1.6 : 1);
-    this.velLag = damp(this.velLag || 0, velY, 9, dt);
+    this.velLag = damp(this.velLag, velY, 9, dt);
 
     // ---- Bob ----
-    const bobScale = settings.viewBob * lerp(1, 0.25, this.ads);
+    const bobScale = settings.viewBob * lerp(1, 0.25, adsK);
     const spd = s.grounded && !s.slide ? clamp(s.moveSpeed, 0, 16) : 0;
     this.bobPhase += dt * spd * 1.15;
     const bobA = clamp(spd / 11, 0, 1) * 0.022 * bobScale;
@@ -421,19 +391,19 @@ export class ViewModel {
     if (s.landImpact) this.landT = Math.min(1, this.landT + s.landImpact);
     this.landT = damp(this.landT, 0, 9, dt);
 
-    // ---- Rueckstoss abklingen ----
-    this.recoilPos = damp(this.recoilPos, 0, 13, dt);
+    // ---- Rueckstoss als gedaempfte Feder ----
+    const KS = 260, KD = 18;
+    this.recoilVel += (-this.recoilPos * KS - this.recoilVel * KD) * dt;
+    this.recoilPos = clamp(this.recoilPos + this.recoilVel * dt, -0.05, 0.3);
     this.recoilRot = damp(this.recoilRot, 0, 11, dt);
     this.recoilRoll = damp(this.recoilRoll, 0, 9, dt);
 
-    // ---- Nachladen / Wechsel / Melee ----
     if (this.reloadT > 0) this.reloadT = Math.max(0, this.reloadT - dt);
     if (this.switchT > 0) this.switchT = Math.max(0, this.switchT - dt);
     if (this.swingT > 0) this.swingT = Math.max(0, this.swingT - dt);
 
     // ---- Zielposition zusammensetzen ----
     const p = this._tmp;
-    const adsK = w.melee ? 0 : this.ads;
     p.copy(this._basePos).lerp(this._adsPos, adsK);
     p.x += this.bob.x + this.sway.x;
     p.y += this.bob.y + this.sway.y - this.landT * 0.09 - this.velLag;
@@ -444,17 +414,23 @@ export class ViewModel {
     let rz = this.recoilRoll + this.bob.x * 0.9 + (w.melee ? -this.sway.x * 1.6 : 0);
     let meshSpin = 0;
 
-    // Atmen (Idle)
+    // Atmen / Idle
     const breath = Math.sin(this.time * 1.7) * (1 - adsK * 0.8);
     p.y += breath * 0.0025;
     rx += breath * 0.004;
+    if (w.melee) {
+      // Ruhige Achterbewegung wie in CS:GO
+      rx += Math.sin(this.time * 1.1) * 0.02;
+      ry += Math.sin(this.time * 0.7) * 0.03;
+      rz += Math.cos(this.time * 0.9) * 0.015;
+    }
 
     // Sprint
     if (this.sprintT > 0.001) {
       const st = this.sprintT;
       if (hold === 'knife' || hold === 'katana') {
-        p.x += st * 0.05; p.y += st * -0.10; p.z += st * 0.06;
-        rx += st * -0.25; ry += st * 0.5; rz += st * 0.3;
+        p.x += st * 0.06; p.y += st * -0.12; p.z += st * 0.05;
+        rx += st * -0.35; ry += st * 0.45; rz += st * 0.35;
       } else if (hold === 'pistol' || hold === 'akimbo') {
         p.x += st * 0.05; p.y += st * -0.07; p.z += st * 0.08;
         rx += st * 0.30; ry += st * 0.40; rz += st * 0.25;
@@ -464,10 +440,10 @@ export class ViewModel {
       }
     }
 
-    // Nachladen: Waffe kippen, Hand zum Magazin
+    // Nachladen
     let magK = 0;
     if (this.reloadT > 0) {
-      const t = 1 - this.reloadT / this.reloadDur;     // 0..1
+      const t = 1 - this.reloadT / this.reloadDur;
       if (w.reloadType === 'single') {
         const c = Math.sin(clamp(t, 0, 1) * Math.PI);
         p.y -= c * 0.06; rx += c * 0.25; rz += c * 0.2;
@@ -482,9 +458,9 @@ export class ViewModel {
       }
     }
 
-    // Waffe zuecken: hochziehen / Messer-Flip / Katana ziehen
+    // Zuecken
     if (this.switchT > 0) {
-      const t = 1 - this.switchT / this.switchDur;     // 0 -> 1
+      const t = 1 - this.switchT / this.switchDur;
       const eq = EQUIP[this.equipKind] || EQUIP.raise;
       p.x += curve(t, eq.px); p.y += curve(t, eq.py); p.z += curve(t, eq.pz);
       rx += curve(t, eq.rx); ry += curve(t, eq.ry); rz += curve(t, eq.rz);
@@ -502,7 +478,6 @@ export class ViewModel {
     this.root.position.copy(p);
     this.root.rotation.set(rx, ry, rz);
 
-    // Haltungsrotation der Waffe (beim Zielen gerade); Flip dreht die Klinge um die Griffachse
     const br = this._baseRot;
     this.mesh.rotation.set(br.x * (1 - adsK) + meshSpin, br.y * (1 - adsK), br.z * (1 - adsK));
 
@@ -526,7 +501,6 @@ export class ViewModel {
       this.mesh.localToWorld(this._hand);
       this._placeArm(this.armL, this._hand, SHOULDER_L);
     } else {
-      // Einhaendig: linke Hand locker unten links, beim Nachladen zum Magazin
       this._hand.copy(FREE_HAND_L);
       if (magK > 0 && MAG_POINT[hold]) {
         const mp = MAG_POINT[hold];
@@ -537,11 +511,17 @@ export class ViewModel {
       this._placeArm(this.armL, this._hand, SHOULDER_L);
     }
 
-    // ---- Muendungsfeuer ausblenden ----
+    // ---- Muendungsfeuer + Licht ausblenden ----
     if (this.flashLife > 0) {
       this.flashLife -= dt;
       this.flashMat.opacity = clamp(this.flashLife / 0.045, 0, 1);
       if (this.flashLife <= 0) this.flash.visible = false;
+    }
+    if (this.lightT > 0) {
+      this.lightT = Math.max(0, this.lightT - dt / 0.07);
+      this.light.intensity = 9 * this.lightT;
+    } else if (this.light.intensity !== 0) {
+      this.light.intensity = 0;
     }
   }
 
@@ -551,5 +531,6 @@ export class ViewModel {
     this.scene.remove(this.root);
     this.flash.geometry.dispose();
     this.flashMat.dispose();
+    this.mat.dispose();
   }
 }

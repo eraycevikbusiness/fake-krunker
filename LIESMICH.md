@@ -120,6 +120,21 @@ Wunschdistanz (Schrotflinte nah, Sniper weit), strafen, springen, legen
 Feuerpausen zur Rückstoßkontrolle ein, laden in Deckung nach und wechseln
 die Waffe, wenn die Munition leer ist.
 
+## Grafik
+
+* **Eigene Post-Processing-Pipeline** (ohne Addons, `src/fx/post.js`): HDR-Rendering,
+  Screen-Space Ambient Occlusion, Bloom, ACES-Tonemapping, Farbkorrektur,
+  Vignette, Filmkorn, leichte chromatische Aberration und FXAA. Alles einzeln
+  abschaltbar (Einstellungen → Grafik).
+* **Physikalisch basierte Materialien**: Welt mit prozeduraler Grunge-Albedo,
+  Normal- und Roughness-Map; Waffen und Figuren mit Metalness/Roughness/Emissive
+  pro Bauteil (ein Material, ein Shader).
+* **Umgebungslicht aus dem Himmel** (PMREM): Metall reflektiert die Szene,
+  Schatten sind nicht mehr flach schwarz.
+* **Abgeschrägte Kanten** an allen Boxen (Welt, Waffen, Figuren) fangen Licht
+  ein, dazu Sonne mit Schatten, Himmel-Shader mit Sonnenscheibe und Dunst.
+* Mündungslicht, HDR-Tracer, Treffer-Flash auf getroffenen Gegnern.
+
 ## Performance
 
 * Jede Figur besteht aus nur 8 Draw-Calls (verschmolzene Geometrie, ein
@@ -133,18 +148,25 @@ die Waffe, wenn die Munition leer ist.
 
 ## Nahkampf
 
-Messer und Katana haben eigene Zück-Animationen (Messer-Flip, Katana wird von
-der Hüfte gezogen), leichte Schläge mit wechselnder Richtung (Linksklick) und
-einen schweren Angriff (Rechtsklick). Bei einem Gegner in Reichweite macht der
+Messer und Katana werden wie in CS:GO/Valorant mit der Klinge nach oben
+gehalten, mit ruhiger Idle-Bewegung, eigenen Zück-Animationen (Messer-Flip,
+Katana wird gezogen), leichten Schlägen mit wechselnder Richtung (Linksklick)
+und einem schweren Angriff (Rechtsklick). Beide haben Goldbeschläge und eine
+leuchtende Hohlkehle (Emissive, sichtbar im Bloom). Bei einem Gegner in Reichweite macht der
 Angreifer einen kurzen Ausfallschritt, Treffer stoßen das Opfer zurück und
 kicken die Kamera. Nahkampfwaffen reagieren träger und stärker auf Mausbewegung
 und Sprünge.
 
 ## Sound
 
-Alle Geräusche werden synthetisiert: Schüsse aus Transient, Crack, Body,
-Verschluss-Klick (Repetierwaffen mit zweitem Klick) und Nachhall über einen
-Hall-Bus, der mit der Entfernung lauter wird. Jede Waffe hat ein eigenes
+Alle Geräusche werden synthetisiert: Schüsse aus 2-ms-Transient, kurzem
+Crack, Body mit steilem Pitch-Drop, Sub und resonantem Tiefpass-Sweep durch
+eine Sättigungsstufe (Waveshaper), danach Mechanik-Klicks (Repetierwaffen
+mit zweitem Klick) und Nachhall über einen Hall-Bus, der mit der Entfernung
+lauter wird. Jede Waffenklasse hat ein eigenes Preset (`PRESETS` in
+`src/core/audio.js`). Schießen fühlt sich weich an: Rückstoß wird über
+~50 ms verteilt, dazu ein Kamera-Kick als Feder, exakte Feuerrate
+unabhängig von der Bildrate, Mündungslicht und Treffer-Flash. Jede Waffe hat ein eigenes
 Zück-Geräusch (Ladegriff, Schlitten, Messer-„Shing“, Katana-Ziehen mit
 Klingenresonanz), Nachladen in drei Schritten, Nahkampf-Schwünge und -Treffer.
 

@@ -664,7 +664,10 @@ export class Actor {
     if (w.burst > 0 && this.burstLeft <= 0) this.burstLeft = w.burst;
 
     if (s.mag !== Infinity) s.mag--;
-    this.fireTimer = fireDelay(w);
+    // Restzeit des letzten Intervalls mitnehmen -> exakte Feuerrate
+    // unabhaengig von der Bildrate (kein Zittern im Rhythmus)
+    const carry = (this.fireTimer < 0 && this.fireTimer > -0.05) ? this.fireTimer : 0;
+    this.fireTimer = fireDelay(w) + carry;
 
     if (this.burstLeft > 0) {
       this.burstLeft--;

@@ -122,7 +122,8 @@ menu = new Menu({
   onSettingChange: (id) => {
     saveSettings();
     if (!game) return;
-    if (id === 'renderScale' || id === 'shadows' || id === 'antialias' || id === 'autoQuality' || id === '*') {
+    if (id === 'renderScale' || id === 'shadows' || id === 'antialias' || id === 'autoQuality' ||
+        id === 'postfx' || id === 'ssao' || id === 'bloom' || id === '*') {
       game.applyGraphicsSettings();
     }
     if (id === 'fog' || id === '*') game._applyFog();

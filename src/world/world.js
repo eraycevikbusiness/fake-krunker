@@ -1,81 +1,46 @@
 // ============================================================
-// Welt: Geometrie-Bau, Kollision, Raycast (Grid-DDA), Navigation
+// Welt: Geometrie-Bau (abgeschraegte Boxen, PBR-Material), Himmel mit
+// Sonne, Umgebungslicht, Kollision, Raycast (Grid-DDA), Navigation
 // ============================================================
 
 import * as THREE from 'three';
 import { clamp, makeRng } from '../core/utils.js';
+import { chamferBox } from '../fx/geom.js';
+import { makeWorldMaterial, makeSkyMaterial, buildEnvironment, unregisterMaterial } from '../fx/materials.js';
 
 const EPS = 1e-4;
-
-// Flaechen-Tint fuer den typischen Blockstil (oben hell, unten dunkel)
-const FACE_TINT = { px: 0.90, nx: 0.82, py: 1.0, ny: 0.62, pz: 0.95, nz: 0.75 };
+const _col = new THREE.Color();
 
 // ------------------------------------------------------------
-// Prozedurale Textur: leichte Kante + Rauschen -> Blockoptik
+// Box (mit Fase) in Arrays anhaengen: Weltkoordinaten, Farbtint nach
+// Normale (oben hell, unten dunkel), UVs planar in Weltmass
 // ------------------------------------------------------------
-function makeBlockTexture() {
-  const S = 128;
-  const cv = document.createElement('canvas');
-  cv.width = cv.height = S;
-  const g = cv.getContext('2d');
-  g.fillStyle = '#ffffff';
-  g.fillRect(0, 0, S, S);
-  // Rauschen
-  const img = g.getImageData(0, 0, S, S);
-  const d = img.data;
-  for (let i = 0; i < d.length; i += 4) {
-    const n = 246 + Math.random() * 9;
-    d[i] = d[i + 1] = d[i + 2] = n;
+function pushBox(A, min, max, color, uvScale, tint, skipBottom, chamfer, hdr) {
+  const w = max.x - min.x, h = max.y - min.y, d = max.z - min.z;
+  const cx = (min.x + max.x) / 2, cy = (min.y + max.y) / 2, cz = (min.z + max.z) / 2;
+  const g = chamferBox(w, h, d, chamfer);
+  _col.setHex(color);
+  const mul = hdr || 1;
+  const base = A.pos.length / 3;
+  const n = g.pos.length / 3;
+  const ny = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const px = g.pos[i * 3] + cx, py = g.pos[i * 3 + 1] + cy, pz = g.pos[i * 3 + 2] + cz;
+    const nx = g.nor[i * 3], nyy = g.nor[i * 3 + 1], nz = g.nor[i * 3 + 2];
+    ny[i] = nyy;
+    A.pos.push(px, py, pz);
+    A.nor.push(nx, nyy, nz);
+    const t = tint ? (0.80 + 0.20 * nyy) : 1;
+    A.col.push(_col.r * t * mul, _col.g * t * mul, _col.b * t * mul);
+    const ax = Math.abs(nx), ay = Math.abs(nyy), az = Math.abs(nz);
+    if (ax >= ay && ax >= az) A.uv.push(pz * uvScale, py * uvScale);
+    else if (ay >= az) A.uv.push(px * uvScale, pz * uvScale);
+    else A.uv.push(px * uvScale, py * uvScale);
   }
-  g.putImageData(img, 0, 0);
-  // Kanten
-  g.strokeStyle = 'rgba(0,0,0,0.14)';
-  g.lineWidth = 2;
-  g.strokeRect(1, 1, S - 2, S - 2);
-  g.strokeStyle = 'rgba(0,0,0,0.05)';
-  g.lineWidth = 1;
-  g.strokeRect(4, 4, S - 8, S - 8);
-
-  const tex = new THREE.CanvasTexture(cv);
-  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.anisotropy = 4;
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
-}
-
-// ------------------------------------------------------------
-// Box-Geometrie in Arrays anhaengen
-// ------------------------------------------------------------
-const FACES = [
-  // dir, normal, 4 Eckpunkte (als Vorzeichen-Kombis), uv-Achsen
-  { k: 'px', n: [1, 0, 0], v: [[1,0,1],[1,0,0],[1,1,0],[1,1,1]], ua: 'z', va: 'y' },
-  { k: 'nx', n: [-1, 0, 0], v: [[0,0,0],[0,0,1],[0,1,1],[0,1,0]], ua: 'z', va: 'y' },
-  { k: 'py', n: [0, 1, 0], v: [[0,1,1],[1,1,1],[1,1,0],[0,1,0]], ua: 'x', va: 'z' },
-  { k: 'ny', n: [0, -1, 0], v: [[0,0,0],[1,0,0],[1,0,1],[0,0,1]], ua: 'x', va: 'z' },
-  { k: 'pz', n: [0, 0, 1], v: [[0,0,1],[1,0,1],[1,1,1],[0,1,1]], ua: 'x', va: 'y' },
-  { k: 'nz', n: [0, 0, -1], v: [[1,0,0],[0,0,0],[0,1,0],[1,1,0]], ua: 'x', va: 'y' },
-];
-const UV_CORNERS = [[0, 0], [1, 0], [1, 1], [0, 1]];
-
-function pushBox(A, min, max, color, uvScale, tint, skipBottom) {
-  const size = { x: max.x - min.x, y: max.y - min.y, z: max.z - min.z };
-  for (const f of FACES) {
-    if (skipBottom && f.k === 'ny') continue;     // Unterseiten am Boden sieht nie jemand
-    const t = tint ? FACE_TINT[f.k] : 1;
-    const r = ((color >> 16) & 255) / 255 * t;
-    const g = ((color >> 8) & 255) / 255 * t;
-    const b = (color & 255) / 255 * t;
-    const base = A.pos.length / 3;
-    const uSize = size[f.ua] * uvScale;
-    const vSize = size[f.va] * uvScale;
-    for (let i = 0; i < 4; i++) {
-      const v = f.v[i];
-      A.pos.push(v[0] ? max.x : min.x, v[1] ? max.y : min.y, v[2] ? max.z : min.z);
-      A.nor.push(f.n[0], f.n[1], f.n[2]);
-      A.col.push(r, g, b);
-      A.uv.push(UV_CORNERS[i][0] * uSize, UV_CORNERS[i][1] * vSize);
-    }
-    A.idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+  for (let i = 0; i < g.idx.length; i += 3) {
+    const a = g.idx[i], b = g.idx[i + 1], c = g.idx[i + 2];
+    if (skipBottom && ny[a] < -0.99 && ny[b] < -0.99 && ny[c] < -0.99) continue;
+    A.idx.push(a + base, b + base, c + base);
   }
 }
 
@@ -132,9 +97,10 @@ class Heap {
 
 // ============================================================
 export class World {
-  constructor(scene, mapDef) {
+  constructor(scene, mapDef, renderer) {
     this.scene = scene;
     this.map = mapDef;
+    this.renderer = renderer;
     this.group = new THREE.Group();
     scene.add(this.group);
 
@@ -144,6 +110,7 @@ export class World {
 
     this.navCell = 1.8;
     this.nav = null;
+    this.envRT = null;
 
     this._buildMeshes();
     this._buildBroadphase();
@@ -154,11 +121,18 @@ export class World {
     this.group.traverse((o) => {
       if (o.geometry) o.geometry.dispose();
       if (o.material) {
-        if (o.material.map) o.material.map.dispose();
+        if (!o.material.userData.sharedTextures) {
+          if (o.material.map) o.material.map.dispose();
+          if (o.material.normalMap) o.material.normalMap.dispose();
+          if (o.material.roughnessMap) o.material.roughnessMap.dispose();
+        }
+        unregisterMaterial(o.material);
         o.material.dispose();
       }
     });
     this.scene.remove(this.group);
+    if (this.envRT) { this.envRT.dispose(); this.envRT = null; }
+    this.scene.environment = null;
   }
 
   // --------------------------------------------------------
@@ -182,8 +156,10 @@ export class World {
         color = (r << 16) | (g << 8) | b;
       }
 
-      if (box.emissive) pushBox(glow, min, max, box.color, 0.25, false, box.by <= 0.001);
-      else pushBox(solid, min, max, color, 0.25, true, box.by <= 0.001);
+      const minDim = Math.min(box.w, box.h, box.d);
+      const chamfer = clamp(minDim * 0.08, 0.02, 0.09);
+      if (box.emissive) pushBox(glow, min, max, box.color, 0.25, false, box.by <= 0.001, chamfer * 0.5, 1.4 + box.emissive * 1.6);
+      else pushBox(solid, min, max, color, 0.25, true, box.by <= 0.001, chamfer, 1);
 
       if (!box.noCollide) {
         this.colliders.push({
@@ -196,11 +172,7 @@ export class World {
       }
     }
 
-    this.blockTex = makeBlockTexture();
-
-    const matSolid = new THREE.MeshLambertMaterial({
-      vertexColors: true, map: this.blockTex,
-    });
+    const matSolid = makeWorldMaterial();
     this.meshSolid = new THREE.Mesh(buildGeometry(solid), matSolid);
     this.meshSolid.castShadow = true;
     this.meshSolid.receiveShadow = true;
@@ -219,25 +191,18 @@ export class World {
 
   _buildSky() {
     const map = this.map;
-    const geo = new THREE.SphereGeometry(600, 24, 16);
-    const pos = geo.attributes.position;
-    const colors = new Float32Array(pos.count * 3);
-    const top = new THREE.Color(map.skyTop);
-    const bot = new THREE.Color(map.skyBottom);
-    const c = new THREE.Color();
-    for (let i = 0; i < pos.count; i++) {
-      const t = clamp((pos.getY(i) / 600) * 0.5 + 0.5, 0, 1);
-      c.copy(bot).lerp(top, Math.pow(t, 0.65));
-      colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
-    }
-    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-    const mat = new THREE.MeshBasicMaterial({
-      vertexColors: true, side: THREE.BackSide, fog: false, depthWrite: false,
-    });
-    this.sky = new THREE.Mesh(geo, mat);
+    const geo = new THREE.SphereGeometry(600, 32, 20);
+    this.skyMat = makeSkyMaterial(map);
+    this.sky = new THREE.Mesh(geo, this.skyMat);
     this.sky.renderOrder = -1000;
     this.sky.frustumCulled = false;
     this.group.add(this.sky);
+
+    // Umgebungslicht aus dem Himmel (Reflexionen auf Metall, weiches Licht)
+    if (this.renderer) {
+      this.envRT = buildEnvironment(this.renderer, this.skyMat);
+      this.scene.environment = this.envRT.texture;
+    }
   }
 
   /** Ferne Silhouetten ausserhalb der Arena fuer Tiefenwirkung */
@@ -254,10 +219,10 @@ export class World {
       const z = Math.sin(ang) * dist;
       const w = 14 + rng() * 40;
       const h = 12 + rng() * 62;
-      const shade = 0.55 + rng() * 0.3;
+      const shade = 0.45 + rng() * 0.3;
       const col = new THREE.Color(base.r * shade, base.g * shade, base.b * shade);
       const hex = (Math.round(col.r * 255) << 16) | (Math.round(col.g * 255) << 8) | Math.round(col.b * 255);
-      pushBox(A, { x: x - w / 2, y: -6, z: z - w / 2 }, { x: x + w / 2, y: h, z: z + w / 2 }, hex, 0.15, true, true);
+      pushBox(A, { x: x - w / 2, y: -6, z: z - w / 2 }, { x: x + w / 2, y: h, z: z + w / 2 }, hex, 0.15, true, true, 0, 1);
     }
     const mesh = new THREE.Mesh(
       buildGeometry(A),
@@ -322,13 +287,8 @@ export class World {
   }
 
   // --------------------------------------------------------
-  // Raycast gegen alle Weltboxen: 2D-Grid-Traversal (DDA) ueber die
-  // Broadphase-Zellen, in jeder Zelle Slab-Test. Bricht ab, sobald ein
-  // Treffer vor dem Zellausgang liegt -> nur ein Bruchteil aller Boxen.
+  // Raycast: 2D-Grid-Traversal (DDA) ueber die Broadphase-Zellen
   // --------------------------------------------------------
-  /**
-   * @returns null oder {t, x,y,z, nx,ny,nz}
-   */
   raycast(ox, oy, oz, dx, dy, dz, maxDist) {
     let bestT = maxDist;
     let bnx = 0, bny = 0, bnz = 0;
@@ -361,7 +321,6 @@ export class World {
             if (mark[c._i] === stamp) continue;
             mark[c._i] = stamp;
 
-            // Schnellverwerfung: Abstand Strahl <-> Boxmittelpunkt
             const mx = c.cx - ox, my = c.cy - oy, mz = c.cz - oz;
             const proj = mx * dx + my * dy + mz * dz;
             if (proj < -c.rad || proj > bestT + c.rad) continue;
@@ -401,11 +360,10 @@ export class World {
       }
 
       const tExit = tMaxX < tMaxZ ? tMaxX : tMaxZ;
-      if (bestT <= tExit) break;          // Treffer liegt noch in dieser Zelle
+      if (bestT <= tExit) break;
       if (tExit >= maxDist) break;
       if (tMaxX < tMaxZ) { ix += stepX; tMaxX += tDeltaX; }
       else { iz += stepZ; tMaxZ += tDeltaZ; }
-      // Raster verlassen und entfernt sich weiter -> fertig
       if ((ix < gx0 && stepX <= 0) || (ix > gx1 && stepX >= 0) ||
           (iz < gz0 && stepZ <= 0) || (iz > gz1 && stepZ >= 0)) break;
     }
@@ -430,28 +388,17 @@ export class World {
   // --------------------------------------------------------
   // Kollision fuer Akteure (AABB, Achse fuer Achse)
   // --------------------------------------------------------
-  /**
-   * Ist der Box-Raum frei?
-   * eps toleriert winzige Ueberlappungen (Stufenkanten ueberlappen sich
-   * bewusst leicht, damit keine Ritzen entstehen).
-   */
   isFree(x, y, z, r, h, eps) {
     const list = this._tmpList || (this._tmpList = []);
     this.query(x - r, z - r, x + r, z + r, list);
     return this._freeIn(list, x, y, z, r, h, eps);
   }
 
-  /**
-   * Bewegt eine Akteur-AABB um delta und loest Kollisionen auf.
-   * p: {x,y,z} wird mutiert.
-   * @returns {ground, ceiling, wallX, wallZ, stepped}
-   */
   moveActor(p, dx, dy, dz, r, h, stepH) {
     const res = this._moveRes || (this._moveRes = { ground: false, ceiling: false, wallX: false, wallZ: false, stepped: 0 });
     res.ground = false; res.ceiling = false; res.wallX = false; res.wallZ = false; res.stepped = 0;
     const list = this._tmpList2 || (this._tmpList2 = []);
 
-    // ---------- X ----------
     if (dx !== 0) {
       p.x += dx;
       this.query(p.x - r - 1, p.z - r - 1, p.x + r + 1, p.z + r + 1, list);
@@ -460,7 +407,6 @@ export class World {
         if (p.x + r <= c.minx + EPS || p.x - r >= c.maxx - EPS) continue;
         if (p.y + h <= c.miny + EPS || p.y >= c.maxy - EPS) continue;
         if (p.z + r <= c.minz + EPS || p.z - r >= c.maxz - EPS) continue;
-        // Stufe hochsteigen?
         const rise = c.maxy - p.y;
         if (stepH > 0 && rise > 0.01 && rise <= stepH && this.isFree(p.x, c.maxy + 0.02, p.z, r, h)) {
           p.y = c.maxy + 0.02; res.stepped += rise; res.ground = true; continue;
@@ -470,7 +416,6 @@ export class World {
       }
     }
 
-    // ---------- Z ----------
     if (dz !== 0) {
       p.z += dz;
       this.query(p.x - r - 1, p.z - r - 1, p.x + r + 1, p.z + r + 1, list);
@@ -488,7 +433,6 @@ export class World {
       }
     }
 
-    // ---------- Y ----------
     if (dy !== 0) {
       p.y += dy;
       this.query(p.x - r - 1, p.z - r - 1, p.x + r + 1, p.z + r + 1, list);
@@ -502,14 +446,12 @@ export class World {
       }
     }
 
-    // Bodenkontakt auch ohne Abwaertsbewegung pruefen
     if (!res.ground) {
       if (!this.isFree(p.x, p.y - 0.08, p.z, r, 0.06)) res.ground = true;
     }
     return res;
   }
 
-  /** Hoehe des Bodens unter einem Punkt (fuer Spawns / Nav) */
   groundAt(x, z, fromY = 80) {
     const h = this.raycast(x, fromY, z, 0, -1, 0, fromY + 20);
     return h ? h.y : 0;
@@ -518,12 +460,6 @@ export class World {
   // --------------------------------------------------------
   // Navigation: mehrstoeckiges Gitter + A*
   // --------------------------------------------------------
-  /**
-   * Kopffreiheit ueber einer Standflaeche.
-   * Alles, dessen Oberkante hoechstens stepUp ueber der Flaeche liegt, ist
-   * ersteigbar und damit KEIN Hindernis - genau das braucht man auf Treppen,
-   * wo die naechste Stufe sonst jeden Knoten verwerfen wuerde.
-   */
   _headFree(list, x, y, z, r, h, stepUp, eps) {
     const e = eps === undefined ? EPS : eps;
     const minx = x - r, maxx = x + r, minz = z - r, maxz = z + r;
@@ -531,7 +467,7 @@ export class World {
     if (maxy <= miny) return true;
     for (let i = 0; i < list.length; i++) {
       const c = list[i];
-      if (c.maxy <= y + stepUp) continue;              // ersteigbar
+      if (c.maxy <= y + stepUp) continue;
       if (maxx > c.minx + e && minx < c.maxx - e &&
           maxy > c.miny + e && miny < c.maxy - e &&
           maxz > c.minz + e && minz < c.maxz - e) return false;
@@ -545,7 +481,6 @@ export class World {
     return this._headFree(list, x, y, z, r, h, stepUp, eps);
   }
 
-  /** isFree-Variante, die eine bereits abgefragte Collider-Liste nutzt */
   _freeIn(list, x, y, z, r, h, eps) {
     const e = eps === undefined ? EPS : eps;
     const minx = x - r, maxx = x + r, minz = z - r, maxz = z + r;
@@ -565,11 +500,6 @@ export class World {
     const n = Math.floor((half * 2) / cs);
     const AGENT_H = 2.1;
     const AGENT_R = 0.5;
-    // Drei verschiedene Radien, sonst funktionieren Treppen nicht:
-    //  SURF_R  - nur die Flaeche direkt unter der Zellmitte finden
-    //  CLEAR_R - Kopffreiheit ueber dieser Flaeche (schmal, damit die
-    //            naechsthoehere Stufe den Knoten nicht verwirft)
-    //  LINK_R  - Durchgangsbreite zwischen zwei Knoten (voller Spielerradius)
     const SURF_R = 0.18;
     const CLEAR_R = 0.45;
     const LINK_R = 0.5;
@@ -583,12 +513,10 @@ export class World {
     const list = [];
     const tops = [];
 
-    // ---- Knoten: begehbare Oberflaechen je Zelle (mehrstoeckig) ----
     for (let iz = 0; iz < n; iz++) {
       for (let ix = 0; ix < n; ix++) {
         const x = -half + cs * (ix + 0.5);
         const z = -half + cs * (iz + 0.5);
-        // Eine Abfrage pro Zelle; die Freiraumtests nutzen dieselbe Liste.
         this.query(x - AGENT_R, z - AGENT_R, x + AGENT_R, z + AGENT_R, list);
 
         tops.length = 0;
@@ -607,11 +535,8 @@ export class World {
           const y = tops[k];
           if (last - y < 0.6) continue;
           last = y;
-          // Nicht in Geometrie stecken ...
           if (!this._freeIn(list, x, y + 0.05, z, SURF_R, 0.4, 0.02)) continue;
-          // ... und genug Platz nach oben (Stufen bis STEP_UP zaehlen nicht)
           if (!this._headFree(list, x, y, z, CLEAR_R, AGENT_H, STEP_UP, NAV_EPS)) continue;
-          // Echte Standflaeche? (direkt darunter muss etwas sein)
           if (y > 0.05 && this._freeIn(list, x, y - 0.14, z, SURF_R, 0.1, 0.02)) continue;
           const node = { id: nodes.length, x, y, z, ix, iz, nb: [], links: null };
           nodes.push(node);
@@ -622,7 +547,6 @@ export class World {
       }
     }
 
-    // ---- Durchgang zwischen zwei Knoten frei? ----
     const passable = (a, b) => {
       const dy = b.y - a.y;
       if (dy > STEP_UP || dy < -MAX_DROP) return -1;
@@ -631,7 +555,6 @@ export class World {
       return Math.hypot(b.x - a.x, b.z - a.z) + Math.abs(dy) * 1.4 + (dy < -1.5 ? 2.5 : 0);
     };
 
-    // ---- Durchgang 1: gerade Nachbarn ----
     const ORTHO = [[1, 0], [-1, 0], [0, 1], [0, -1]];
     for (let i = 0; i < nodes.length; i++) {
       const a = nodes[i];
@@ -650,7 +573,6 @@ export class World {
       }
     }
 
-    // ---- Durchgang 2: Diagonalen nur, wenn beide geraden Wege offen sind ----
     const DIAG = [[1, 1], [1, -1], [-1, 1], [-1, -1]];
     for (let i = 0; i < nodes.length; i++) {
       const a = nodes[i];
@@ -683,7 +605,6 @@ export class World {
     };
   }
 
-  /** Naechstgelegener Nav-Knoten */
   nearestNode(x, y, z) {
     const nav = this.nav;
     if (!nav) return null;
@@ -710,9 +631,6 @@ export class World {
     return best;
   }
 
-  /**
-   * A*-Pfad. Gibt Array von {x,y,z} zurueck (ohne Startknoten) oder null.
-   */
   findPath(sx, sy, sz, tx, ty, tz, maxNodes = 2600) {
     const nav = this.nav;
     if (!nav) return null;
@@ -767,12 +685,11 @@ export class World {
       id = came[id];
     }
     path.reverse();
-    path.shift();                       // Startknoten weglassen
-    path.push({ x: tx, y: ty, z: tz }); // exaktes Ziel anhaengen
+    path.shift();
+    path.push({ x: tx, y: ty, z: tz });
     return path;
   }
 
-  /** Zufaellige, begehbare Position (fuer Bot-Wandern) */
   randomNavPoint() {
     const nav = this.nav;
     if (!nav || !nav.nodes.length) return { x: 0, y: 0, z: 0 };

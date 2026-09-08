@@ -16,6 +16,12 @@ export class LocalPlayer extends Actor {
 
     this.recoilAccP = 0;
     this.recoilAccY = 0;
+    this.recoilQueueP = 0;      // noch nicht angewendeter Rueckstoss (wird weich verteilt)
+    this.recoilQueueY = 0;
+    this.punch = 0;             // sichtbarer Kamera-Kick (Feder, kehrt zurueck)
+    this.punchV = 0;
+    this.punchRoll = 0;
+    this.punchRollV = 0;
     this.lastFireTime = -99;
 
     this.shake = 0;
@@ -47,12 +53,13 @@ export class LocalPlayer extends Actor {
   }
 
   addRecoil(v, h) {
-    this.pitch += v;
-    this.yaw += h;
-    this.recoilAccP += v;
-    this.recoilAccY += h;
+    // Nicht sofort springen: der Rueckstoss wird in den naechsten ~50 ms
+    // weich auf die Blickrichtung verteilt, dazu ein Kamera-Kick als Feder.
+    this.recoilQueueP += v;
+    this.recoilQueueY += h;
+    this.punchV += v * 3.2;
+    this.punchRollV += h * 2.2;
     this.lastFireTime = this.game.time;
-    this.pitch = clamp(this.pitch, -PITCH_LIMIT, PITCH_LIMIT);
   }
 
   addShake(amount) {
@@ -69,6 +76,8 @@ export class LocalPlayer extends Actor {
   }
 
   onDeath(killer) {
+    this.recoilQueueP = this.recoilQueueY = 0;
+    this.punch = this.punchV = this.punchRoll = this.punchRollV = 0;
     this.deathCamT = 0;
     this.deathYaw = this.yaw;
     this.killer = killer && killer !== this ? killer : null;
@@ -101,6 +110,16 @@ export class LocalPlayer extends Actor {
     if (this.alive) {
       this.yaw -= dx * sens;
       this.pitch -= dy * sens;
+      // Ausstehenden Rueckstoss weich anwenden
+      if (this.recoilQueueP !== 0 || this.recoilQueueY !== 0) {
+        const k = 1 - Math.exp(-dt * 45);
+        const dp = this.recoilQueueP * k, dyw = this.recoilQueueY * k;
+        this.pitch += dp; this.yaw += dyw;
+        this.recoilAccP += dp; this.recoilAccY += dyw;
+        this.recoilQueueP -= dp; this.recoilQueueY -= dyw;
+        if (Math.abs(this.recoilQueueP) < 1e-4) this.recoilQueueP = 0;
+        if (Math.abs(this.recoilQueueY) < 1e-4) this.recoilQueueY = 0;
+      }
       // Manuelle Rueckstosskompensation anrechnen
       if (dy > 0) this.recoilAccP = Math.max(0, this.recoilAccP - dy * sens);
       if (dx * this.recoilAccY < 0) {
@@ -212,6 +231,12 @@ export class LocalPlayer extends Actor {
       this.shakeOffset.set(0, 0, 0);
     }
 
+    // Kamera-Kick als gedaempfte Feder (kehrt weich zurueck)
+    this.punchV += (-this.punch * 420 - this.punchV * 26) * dt;
+    this.punch += this.punchV * dt;
+    this.punchRollV += (-this.punchRoll * 300 - this.punchRollV * 22) * dt;
+    this.punchRoll += this.punchRollV * dt;
+
     // Treppen-Glaettung und Landungs-Dip
     this.stepOffset = damp(this.stepOffset, 0, 16, dt);
     if (Math.abs(this.stepOffset) < 0.002) this.stepOffset = 0;
@@ -246,8 +271,8 @@ export class LocalPlayer extends Actor {
 
     camera.rotation.order = 'YXZ';
     camera.rotation.y = this.yaw;
-    camera.rotation.x = this.pitch - this.landDip * 0.25;
-    camera.rotation.z = this.viewRoll;
+    camera.rotation.x = this.pitch - this.landDip * 0.25 + this.punch * settings.shake;
+    camera.rotation.z = this.viewRoll + this.punchRoll * 0.5 * settings.shake;
 
     if (this.thirdPerson || settings.thirdPerson) {
       const dist = 5.5;
