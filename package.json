@@ -1,13 +1,14 @@
 {
-  "name": "krunker-clone",
-  "version": "1.0.0",
+  "name": "fragstorm",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
-  "description": "Browser-FPS im Krunker-Stil mit Bots, Waffen und Klassen",
+  "description": "FRAGSTORM - Browser-Arena-FPS mit Bots, Waffen und Klassen (Windows, Linux, macOS)",
   "scripts": {
-    "start": "node serve.mjs"
+    "start": "node serve.mjs",
+    "serve": "node serve.mjs --no-open"
   },
-  "dependencies": {
-    "puppeteer": "^25.10.0"
+  "engines": {
+    "node": ">=16"
   }
 }

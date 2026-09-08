@@ -4,7 +4,7 @@
 
 import * as THREE from 'three';
 import { settings } from '../core/settings.js';
-import { rand, randSign, clamp } from '../core/utils.js';
+import { rand, clamp } from '../core/utils.js';
 
 // ------------------------------------------------------------
 // Partikelsystem (GPU-Points, CPU-Simulation)
@@ -54,10 +54,15 @@ class ParticleSystem {
     this.a0 = new Float32Array(capacity);
 
     const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.BufferAttribute(this.pos, 3));
-    g.setAttribute('pcolor', new THREE.BufferAttribute(this.col, 3));
-    g.setAttribute('psize', new THREE.BufferAttribute(this.size, 1));
-    g.setAttribute('palpha', new THREE.BufferAttribute(this.alpha, 1));
+    this.attrPos = new THREE.BufferAttribute(this.pos, 3);
+    this.attrCol = new THREE.BufferAttribute(this.col, 3);
+    this.attrSize = new THREE.BufferAttribute(this.size, 1);
+    this.attrAlpha = new THREE.BufferAttribute(this.alpha, 1);
+    for (const a of [this.attrPos, this.attrCol, this.attrSize, this.attrAlpha]) a.setUsage(THREE.DynamicDrawUsage);
+    g.setAttribute('position', this.attrPos);
+    g.setAttribute('pcolor', this.attrCol);
+    g.setAttribute('psize', this.attrSize);
+    g.setAttribute('palpha', this.attrAlpha);
     g.setDrawRange(0, 0);
     g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e6);
 
@@ -73,6 +78,7 @@ class ParticleSystem {
     this.points = new THREE.Points(g, m);
     this.points.frustumCulled = false;
     this.points.renderOrder = 10;
+    this.maxTouched = 0;
     scene.add(this.points);
   }
 
@@ -97,6 +103,7 @@ class ParticleSystem {
   }
 
   update(dt) {
+    if (this.count === 0 && this.maxTouched === 0) return;
     // Achtung: this.count schrumpft im Schleifenkoerper -> nicht cachen
     for (let i = 0; i < this.count; i++) {
       if (this.life[i] <= 0) continue;
@@ -124,11 +131,21 @@ class ParticleSystem {
       this.size[i] = this.size0[i] + (this.size1[i] - this.size0[i]) * t;
       this.alpha[i] = this.a0[i] * (1 - t * t);
     }
+    // Nur den benutzten Bereich zur GPU schicken
+    const n = Math.max(this.count, this.maxTouched);
+    this.maxTouched = this.count;
     this.geo.setDrawRange(0, this.count);
-    this.geo.attributes.position.needsUpdate = true;
-    this.geo.attributes.pcolor.needsUpdate = true;
-    this.geo.attributes.psize.needsUpdate = true;
-    this.geo.attributes.palpha.needsUpdate = true;
+    if (n > 0) {
+      this._flag(this.attrPos, n * 3);
+      this._flag(this.attrCol, n * 3);
+      this._flag(this.attrSize, n);
+      this._flag(this.attrAlpha, n);
+    }
+  }
+
+  _flag(attr, count) {
+    if (attr.clearUpdateRanges) { attr.clearUpdateRanges(); attr.addUpdateRange(0, count); }
+    attr.needsUpdate = true;
   }
 
   _swap(a, b) {
@@ -139,7 +156,10 @@ class ParticleSystem {
       t = this.col[a3 + k]; this.col[a3 + k] = this.col[b3 + k]; this.col[b3 + k] = t;
     }
     const arrs = ['size', 'alpha', 'life', 'maxLife', 'grav', 'drag', 'size0', 'size1', 'a0'];
-    for (const k of arrs) { const t = this[k][a]; this[k][a] = this[k][b]; this[k][b] = t; }
+    for (let j = 0; j < arrs.length; j++) {
+      const k = arrs[j];
+      const t = this[k][a]; this[k][a] = this[k][b]; this[k][b] = t;
+    }
   }
 
   clear() { this.count = 0; this.geo.setDrawRange(0, 0); }
@@ -213,7 +233,7 @@ const MAX_DECALS = 90;
 const MAX_TRACERS = 80;
 
 export class Effects {
-  constructor(scene, vmScene) {
+  constructor(scene) {
     this.scene = scene;
     this.sparks = new ParticleSystem(scene, 1400, true);
     this.smoke = new ParticleSystem(scene, 900, false);
@@ -293,6 +313,7 @@ export class Effects {
     this._q = new THREE.Quaternion();
     this._up = new THREE.Vector3(0, 1, 0);
     this._fwd = new THREE.Vector3(0, 0, 1);
+    this._col = new THREE.Color();
   }
 
   get amount() { return settings.particles; }
@@ -319,7 +340,7 @@ export class Effects {
   impact(x, y, z, nx, ny, nz, colorHex) {
     const amt = this.amount;
     if (amt <= 0) return;
-    const c = new THREE.Color(colorHex === undefined ? 0xbba97a : colorHex);
+    const c = this._col.setHex(colorHex === undefined ? 0xbba97a : colorHex);
     const n = Math.round(7 * amt);
     for (let i = 0; i < n; i++) {
       const sx = nx + rand(-0.8, 0.8), sy = ny + rand(-0.4, 1.0), sz = nz + rand(-0.8, 0.8);
@@ -372,7 +393,6 @@ export class Effects {
     m.position.set(x + dirx * 0.15, y + diry * 0.15, z + dirz * 0.15);
     m.scale.setScalar((scale || 1) * rand(0.55, 0.85));
     m.material.opacity = 1;
-    m.userData.spin = Math.random() * Math.PI;
     f.life = 0.055;
 
     const amt = this.amount;
@@ -424,14 +444,14 @@ export class Effects {
         { r: 0.22, g: 0.2, b: 0.19, life: rand(0.8, 1.8), size0: rand(0.4, 0.9), size1: rand(1.6, 3.2), gravity: -1.4, drag: 1.5, alpha: 0.55 });
     }
     if (settings.decals) {
-      this.decal(x, y - radius * 0.0, z, 0, 1, 0, radius * 0.9);
+      this.decal(x, y, z, 0, 1, 0, radius * 0.9);
     }
   }
 
   /** Rauchspur fuer Projektile */
   trail(x, y, z, color) {
     if (this.amount <= 0) return;
-    const c = new THREE.Color(color === undefined ? 0x999999 : color);
+    const c = this._col.setHex(color === undefined ? 0x999999 : color);
     this.smoke.spawn(x, y, z, rand(-0.4, 0.4), rand(0.1, 0.8), rand(-0.4, 0.4),
       { r: c.r, g: c.g, b: c.b, life: rand(0.35, 0.7), size0: 0.12, size1: 0.5, gravity: -0.8, drag: 2.2, alpha: 0.35 });
   }
@@ -450,7 +470,7 @@ export class Effects {
 
   /** Teleport-/Spawn-Effekt */
   spawnFlash(x, y, z, colorHex) {
-    const c = new THREE.Color(colorHex);
+    const c = this._col.setHex(colorHex);
     const n = Math.round(26 * this.amount);
     for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2;
@@ -513,9 +533,13 @@ export class Effects {
 
   dispose() {
     this.scene.remove(this.sparks.points, this.smoke.points, this.decalGroup, this.tracerGroup);
-    for (const b of this.blasts) this.scene.remove(b.mesh);
-    for (const f of this.flashes) this.scene.remove(f.mesh);
+    this.sparks.points.material.dispose(); this.sparks.geo.dispose();
+    this.smoke.points.material.dispose(); this.smoke.geo.dispose();
+    for (const d of this.decals) d.mesh.material.dispose();
+    for (const t of this.tracers) t.mesh.material.dispose();
+    for (const b of this.blasts) { this.scene.remove(b.mesh); b.mesh.material.dispose(); }
+    for (const f of this.flashes) { this.scene.remove(f.mesh); f.mesh.material.dispose(); }
     this.decalGeo.dispose(); this.tracerGeo.dispose(); this.blastGeo.dispose(); this.flashGeo.dispose();
-    this.holeTex.dispose(); this.flashTex.dispose();
+    this.holeTex.dispose(); this.flashTex.dispose(); this.decalMat.dispose();
   }
 }

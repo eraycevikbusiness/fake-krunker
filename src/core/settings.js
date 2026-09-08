@@ -2,7 +2,8 @@
 // Einstellungen: Definition, Persistenz (localStorage), UI-Bau
 // ============================================================
 
-const KEY = 'krunkerclone.settings.v1';
+const KEY = 'fragstorm.settings.v2';
+const LEGACY_KEYS = ['krunkerclone.settings.v1'];
 
 /**
  * Schema für die Settings-UI. type: range | check | select
@@ -16,6 +17,7 @@ export const SCHEMA = [
   { id: 'thirdPerson', label: 'Third-Person-Kamera', type: 'check', def: false },
 
   { head: 'GRAFIK' },
+  { id: 'autoQuality', label: 'Auto-Auflösung (FPS halten)', type: 'check', def: true },
   { id: 'renderScale', label: 'Auflösungsskalierung', type: 'range', min: 0.5, max: 2, step: 0.05, def: 1, fmt: v => Math.round(v * 100) + '%' },
   { id: 'shadows',     label: 'Schatten',            type: 'select', def: 'high', options: [['off','Aus'],['low','Niedrig'],['high','Hoch'],['ultra','Ultra']] },
   { id: 'antialias',   label: 'Kantenglättung *',    type: 'check', def: true },
@@ -42,8 +44,11 @@ export const SCHEMA = [
   { id: 'volUi',       label: 'Interface',           type: 'range', min: 0, max: 1, step: 0.01, def: 0.7, fmt: v => Math.round(v * 100) + '%' },
 
   { head: 'GAMEPLAY' },
+  { id: 'sprintMode',  label: 'Sprint',              type: 'select', def: 'hold', options: [['hold','Shift halten'],['toggle','Shift umschalten'],['always','Immer rennen']] },
+  { id: 'crouchKey',   label: 'Ducken-Taste',        type: 'select', def: 'c', options: [['c','C (+ Strg)'],['ctrl','Strg (+ C)'],['alt','Alt (+ C)']] },
   { id: 'toggleAds',   label: 'Zielen umschalten',   type: 'check', def: false },
   { id: 'toggleCrouch',label: 'Ducken umschalten',   type: 'check', def: false },
+  { id: 'autoJump',    label: 'Auto-Bunnyhop (Leertaste halten)', type: 'check', def: true },
   { id: 'autoReload',  label: 'Auto-Nachladen',      type: 'check', def: true },
   { id: 'viewBob',     label: 'Kamerawackeln',       type: 'range', min: 0, max: 2, step: 0.1, def: 1, fmt: v => Math.round(v * 100) + '%' },
   { id: 'shake',       label: 'Screenshake',         type: 'range', min: 0, max: 2, step: 0.1, def: 1, fmt: v => Math.round(v * 100) + '%' },
@@ -57,17 +62,29 @@ function defaults() {
 
 export const settings = defaults();
 
+function applyData(data) {
+  if (!data || typeof data !== 'object') return;
+  for (const s of SCHEMA) {
+    if (!s.id || data[s.id] === undefined) continue;
+    const v = data[s.id];
+    if (typeof v !== typeof s.def) continue;
+    if (s.type === 'select' && !s.options.some(o => o[0] === v)) continue;
+    if (s.type === 'range' && (!isFinite(v) || v < s.min || v > s.max)) continue;
+    settings[s.id] = v;
+  }
+}
+
 export function loadSettings() {
   try {
-    const raw = localStorage.getItem(KEY);
-    if (raw) {
-      const data = JSON.parse(raw);
-      for (const s of SCHEMA) {
-        if (s.id && data[s.id] !== undefined && typeof data[s.id] === typeof s.def) {
-          settings[s.id] = data[s.id];
-        }
+    let raw = localStorage.getItem(KEY);
+    if (!raw) {
+      // Alte Speicherstaende uebernehmen
+      for (const k of LEGACY_KEYS) {
+        raw = localStorage.getItem(k);
+        if (raw) break;
       }
     }
+    if (raw) applyData(JSON.parse(raw));
   } catch (e) { /* localStorage kann blockiert sein */ }
   return settings;
 }

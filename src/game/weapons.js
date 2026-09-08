@@ -2,6 +2,13 @@
 // Waffen- und Klassendefinitionen
 // Modelle werden aus Boxen zusammengesetzt (parts).
 // Lokales Koordinatensystem: -Z = Laufrichtung, +Y = oben, +X = rechts
+//
+// Neu: jede Waffe hat
+//   hold   - Haltungstyp (rifle | pistol | akimbo | launcher | knife | katana | nade)
+//   grips  - Griffpunkte fuer rechte/linke Hand im Waffenraum (Arme werden
+//            per Mini-IK von der Schulter dorthin gezogen)
+//   vmPos / vmRot - Ablage in der Egoansicht (optional)
+//   swing  - Nahkampf-Animation (slash | sweep)
 // ============================================================
 
 const MAT = {
@@ -9,8 +16,10 @@ const MAT = {
   dark:   0x1b1d22,
   metal:  0x555b66,
   steel:  0x8a929e,
+  edge:   0xd6dde6,
   wood:   0x6b4a2c,
   grip:   0x22242a,
+  wrap:   0x3a2a4a,
   accent: 0xffc21f,
   green:  0x3f5c3a,
   tan:    0x9a8461,
@@ -126,17 +135,28 @@ const PARTS = {
     p(0.13, 0.005, -0.42, 0.045, 0.05, 0.20, MAT.dark),
     p(0.13, -0.17, 0.02, 0.06, 0.26, 0.10, MAT.grip, { x: -0.14 }),
   ],
+  // Kampfmesser: Griff hinten (+Z), Klinge nach vorn (-Z), Schneide unten
   knife: [
-    p(0, -0.02, 0.10, 0.045, 0.09, 0.22, MAT.grip),
-    p(0, 0.0, -0.02, 0.09, 0.03, 0.05, MAT.metal),
-    p(0, 0.0, -0.26, 0.02, 0.08, 0.46, MAT.steel),
-    p(0, 0.03, -0.52, 0.02, 0.05, 0.10, MAT.steel),
+    p(0, -0.01, 0.12, 0.046, 0.085, 0.24, MAT.grip),
+    p(0, -0.01, 0.245, 0.05, 0.09, 0.03, MAT.metal),          // Knauf
+    p(0, 0.0, -0.005, 0.095, 0.028, 0.05, MAT.metal),         // Parierstange
+    p(0, 0.005, -0.26, 0.02, 0.08, 0.46, MAT.steel),          // Klinge
+    p(0, -0.036, -0.26, 0.012, 0.016, 0.46, MAT.edge),        // Schneide
+    p(0, 0.028, -0.52, 0.02, 0.045, 0.10, MAT.steel),         // Spitze
+    p(0, 0.032, -0.20, 0.006, 0.02, 0.36, MAT.dark),          // Blutrinne
   ],
+  // Katana: langer, umwickelter Griff, Tsuba, leicht gebogene Klinge
   katana: [
-    p(0, -0.02, 0.14, 0.04, 0.05, 0.30, MAT.dark),
-    p(0, 0.0, -0.03, 0.11, 0.03, 0.06, MAT.accent),
-    p(0, 0.02, -0.55, 0.018, 0.075, 1.02, MAT.steel),
-    p(0, 0.055, -1.02, 0.018, 0.045, 0.16, MAT.steel),
+    p(0, -0.02, 0.10, 0.04, 0.05, 0.10, MAT.wrap),
+    p(0, -0.02, 0.20, 0.04, 0.05, 0.10, MAT.dark),
+    p(0, -0.02, 0.30, 0.04, 0.05, 0.10, MAT.wrap),
+    p(0, -0.02, 0.36, 0.044, 0.054, 0.03, MAT.accent),        // Kashira
+    p(0, 0.0, 0.03, 0.12, 0.028, 0.07, MAT.accent),           // Tsuba
+    p(0, 0.01, -0.30, 0.018, 0.075, 0.66, MAT.steel),         // Klinge hinten
+    p(0, 0.04, -0.82, 0.018, 0.07, 0.42, MAT.steel, { x: 0.06 }), // Klinge vorn (leicht gebogen)
+    p(0, -0.026, -0.30, 0.01, 0.014, 0.66, MAT.edge),         // Schneide
+    p(0, 0.008, -0.82, 0.01, 0.014, 0.40, MAT.edge, { x: 0.06 }),
+    p(0, 0.075, -1.06, 0.018, 0.04, 0.12, MAT.steel, { x: 0.10 }), // Kissaki (Spitze)
   ],
   nade: [
     p(0, 0, 0, 0.14, 0.18, 0.14, MAT.green),
@@ -169,6 +189,7 @@ function W(o) {
     parts: PARTS.ar,
     muzzle: [0, 0.03, -1.42],
     hold: 'rifle',
+    grips: { r: [0, -0.16, 0.10], l: [0, -0.05, -0.62] },
     icon: '\u{1F52B}',
   }, o);
 }
@@ -182,6 +203,7 @@ export const WEAPONS = {
     recoilV: 0.95, recoilH: 0.34,
     range: 320, falloffStart: 45, falloffEnd: 140, falloffMin: 0.6,
     moveMult: 1.0, parts: PARTS.ar,
+    grips: { r: [0, -0.16, 0.10], l: [0, -0.05, -0.62] },
     sound: { vol: 0.85, lowCut: 190, hiCut: 5400, dur: 0.15, body: 100, punch: 1 },
   }),
   smg: W({
@@ -191,6 +213,7 @@ export const WEAPONS = {
     recoilV: 0.55, recoilH: 0.42, kick: 0.035,
     range: 160, falloffStart: 22, falloffEnd: 70, falloffMin: 0.45,
     moveMult: 1.14, adsFov: 0.82, parts: PARTS.smg, muzzle: [0, 0.02, -0.9],
+    grips: { r: [0, -0.14, 0.10], l: [0, -0.05, -0.45] },
     tracer: 0xffe8b0,
     sound: { vol: 0.6, lowCut: 260, hiCut: 6200, dur: 0.1, body: 130, punch: 0.8 },
   }),
@@ -205,6 +228,7 @@ export const WEAPONS = {
     adsFov: 0.16, adsTime: 0.24, scope: true, pierce: 1,
     moveMult: 0.86, adsMoveMult: 0.28,
     switchTime: 0.7, parts: PARTS.sniper, muzzle: [0, 0.01, -1.36],
+    grips: { r: [0, -0.13, 0.16], l: [0, -0.06, -0.60] },
     tracer: 0xffffff, tracerWidth: 0.07,
     sound: { vol: 1.25, lowCut: 120, hiCut: 4200, dur: 0.35, body: 62, punch: 1.5 },
   }),
@@ -217,6 +241,7 @@ export const WEAPONS = {
     range: 60, falloffStart: 9, falloffEnd: 34, falloffMin: 0.18,
     adsFov: 0.86, moveMult: 0.96,
     parts: PARTS.shotgun, muzzle: [0, 0.03, -1.2],
+    grips: { r: [0, -0.13, 0.12], l: [0, -0.08, -0.82] },
     tracer: 0xffd27a, tracerWidth: 0.035,
     sound: { vol: 1.15, lowCut: 110, hiCut: 3600, dur: 0.3, body: 70, punch: 1.4 },
   }),
@@ -228,6 +253,7 @@ export const WEAPONS = {
     range: 320, falloffStart: 55, falloffEnd: 160, falloffMin: 0.65,
     moveMult: 0.82, adsMoveMult: 0.34, adsFov: 0.72, switchTime: 0.75,
     parts: PARTS.lmg, muzzle: [0, 0.02, -1.4],
+    grips: { r: [0, -0.15, 0.12], l: [0, -0.10, -0.70] },
     sound: { vol: 1.0, lowCut: 150, hiCut: 4800, dur: 0.2, body: 78, punch: 1.25 },
   }),
   marksman: W({
@@ -238,6 +264,7 @@ export const WEAPONS = {
     range: 400, falloffStart: 90, falloffEnd: 240, falloffMin: 0.8,
     adsFov: 0.44, adsTime: 0.2, moveMult: 0.93,
     parts: PARTS.burst, muzzle: [0, 0.02, -1.2],
+    grips: { r: [0, -0.15, 0.10], l: [0, -0.05, -0.66] },
     tracer: 0xfff0c0,
     sound: { vol: 1.0, lowCut: 150, hiCut: 4600, dur: 0.22, body: 82, punch: 1.2 },
   }),
@@ -249,6 +276,7 @@ export const WEAPONS = {
     recoilV: 0.85, recoilH: 0.28,
     range: 340, falloffStart: 60, falloffEnd: 170, falloffMin: 0.7,
     adsFov: 0.62, parts: PARTS.burst, muzzle: [0, 0.02, -1.2],
+    grips: { r: [0, -0.15, 0.10], l: [0, -0.05, -0.66] },
     sound: { vol: 0.8, lowCut: 210, hiCut: 5600, dur: 0.13, body: 105, punch: 0.95 },
   }),
   akimbo: W({
@@ -259,6 +287,8 @@ export const WEAPONS = {
     range: 120, falloffStart: 18, falloffEnd: 55, falloffMin: 0.4,
     adsFov: 0.92, moveMult: 1.18,
     parts: PARTS.akimbo, muzzle: [0, 0.0, -0.56], dualMuzzle: [[-0.13, 0, -0.56], [0.13, 0, -0.56]],
+    hold: 'akimbo',
+    grips: { r: [0.13, -0.16, 0.02], l: [-0.13, -0.16, 0.02] },
     vmPos: [0.0, -0.20, -0.62],
     sound: { vol: 0.5, lowCut: 300, hiCut: 6600, dur: 0.08, body: 150, punch: 0.7 },
   }),
@@ -272,6 +302,9 @@ export const WEAPONS = {
     projectile: { speed: 62, gravity: 5.5, radius: 0.28, color: 0xd8d8d8,
                   explode: { radius: 8.5, damage: 110, minMult: 0.22, force: 16, selfMult: 0.55 } },
     parts: PARTS.rpg, muzzle: [0, 0.02, -1.6],
+    hold: 'launcher',
+    grips: { r: [0, -0.16, 0.02], l: [0, -0.14, -0.60] },
+    vmPos: [0.21, -0.13, -0.62],
     sound: { vol: 1.2, lowCut: 120, hiCut: 3200, dur: 0.4, body: 60, punch: 1.5 },
   }),
   crossbow: W({
@@ -284,6 +317,7 @@ export const WEAPONS = {
     projectile: { speed: 105, gravity: 0, radius: 0.2, color: 0x2ee6ff, glow: true,
                   explode: { radius: 3.4, damage: 46, minMult: 0.3, force: 6, selfMult: 0.25 } },
     parts: PARTS.smg, muzzle: [0, 0.02, -0.9],
+    grips: { r: [0, -0.14, 0.10], l: [0, -0.05, -0.45] },
     tracer: 0x2ee6ff,
     sound: { vol: 0.7, lowCut: 400, hiCut: 7000, dur: 0.18, body: 220, punch: 0.8 },
   }),
@@ -297,6 +331,8 @@ export const WEAPONS = {
     range: 140, falloffStart: 26, falloffEnd: 80, falloffMin: 0.45,
     adsFov: 0.8, moveMult: 1.12, switchTime: 0.3,
     parts: PARTS.pistol, muzzle: [0, 0.0, -0.5],
+    hold: 'pistol',
+    grips: { r: [0, -0.15, 0.02], l: [-0.035, -0.20, 0.0] },
     sound: { vol: 0.6, lowCut: 260, hiCut: 6000, dur: 0.12, body: 120, punch: 0.9 },
   }),
   revolver: W({
@@ -307,6 +343,8 @@ export const WEAPONS = {
     range: 200, falloffStart: 45, falloffEnd: 120, falloffMin: 0.55,
     adsFov: 0.66, moveMult: 1.05, switchTime: 0.38,
     parts: PARTS.revolver, muzzle: [0, 0.01, -0.6],
+    hold: 'pistol',
+    grips: { r: [0, -0.14, 0.10], l: [-0.035, -0.19, 0.08] },
     sound: { vol: 1.0, lowCut: 140, hiCut: 4600, dur: 0.26, body: 74, punch: 1.35 },
   }),
 
@@ -314,17 +352,25 @@ export const WEAPONS = {
   knife: W({
     id: 'knife', name: 'Combat Knife', short: 'KNIFE', slot: 2,
     damage: 55, headMult: 1.6, rpm: 130, auto: false, mag: Infinity, reserve: 0,
-    melee: true, meleeRange: 3.4, meleeArc: 0.55, meleeBackstab: 3.0,
+    melee: true, meleeRange: 3.4, meleeArc: 0.55, meleeBackstab: 3.0, swing: 'slash', swingTime: 0.32,
     moveMult: 1.25, switchTime: 0.25, adsFov: 1, spread: 0,
     parts: PARTS.knife, muzzle: [0, 0, -0.5],
+    hold: 'knife',
+    grips: { r: [0, -0.02, 0.11], l: null },
+    vmPos: [0.28, -0.27, -0.50],
+    vmRot: [0.35, 0.45, -0.40],
     icon: '\u{1F52A}',
   }),
   katana: W({
     id: 'katana', name: 'Katana', short: 'KATANA', slot: 2,
     damage: 95, headMult: 1.2, rpm: 100, auto: false, mag: Infinity, reserve: 0,
-    melee: true, meleeRange: 4.4, meleeArc: 0.6, meleeBackstab: 1.6,
+    melee: true, meleeRange: 4.4, meleeArc: 0.6, meleeBackstab: 1.6, swing: 'sweep', swingTime: 0.42,
     moveMult: 1.3, switchTime: 0.3, adsFov: 1, spread: 0,
     parts: PARTS.katana, muzzle: [0, 0, -1.0],
+    hold: 'katana',
+    grips: { r: [0, -0.02, 0.09], l: [0, -0.02, 0.28] },
+    vmPos: [0.31, -0.33, -0.56],
+    vmRot: [0.74, 0.04, -0.34],
     icon: '⚔',
   }),
 
@@ -335,6 +381,8 @@ export const WEAPONS = {
     projectile: { speed: 26, gravity: 20, radius: 0.16, color: 0x3f5c3a, bounce: 0.42, fuse: 1.6,
                   explode: { radius: 8.0, damage: 125, minMult: 0.2, force: 14, selfMult: 0.75 } },
     parts: PARTS.nade, muzzle: [0, 0, -0.2],
+    hold: 'nade',
+    grips: { r: [0, -0.05, 0.0], l: null },
     switchTime: 0.25, moveMult: 1.1,
     icon: '\u{1F4A3}',
   }),

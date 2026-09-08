@@ -1,8 +1,8 @@
 /* ============================================================
-   KRUNKER CLONE — UI Stylesheet
+   FRAGSTORM — UI Stylesheet
+   (Schriften werden in index.html nicht-blockierend geladen;
+    ohne Internet greifen die System-Fallbacks.)
    ============================================================ */
-
-@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Rajdhani:wght@500;600;700&display=swap');
 
 :root {
   --accent:      #ffcc00;
@@ -16,8 +16,8 @@
   --stroke:      rgba(255, 255, 255, 0.10);
   --text:        #e8edf5;
   --dim:         #8d97a8;
-  --font:        'Rajdhani', 'Segoe UI', system-ui, sans-serif;
-  --font-head:   'Bebas Neue', 'Rajdhani', Impact, sans-serif;
+  --font:        'Rajdhani', 'Segoe UI', 'Helvetica Neue', system-ui, sans-serif;
+  --font-head:   'Bebas Neue', 'Rajdhani', Impact, 'Arial Narrow', sans-serif;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -28,6 +28,7 @@ html, body {
   font-family: var(--font);
   user-select: none; -webkit-user-select: none;
   cursor: default;
+  -webkit-tap-highlight-color: transparent;
 }
 
 canvas#game-canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
@@ -65,19 +66,32 @@ canvas#game-canvas { position: fixed; inset: 0; width: 100%; height: 100%; displ
 }
 .menu-inner::-webkit-scrollbar { width: 9px; }
 .menu-inner::-webkit-scrollbar-thumb { background: #2c3547; border-radius: 6px; }
+.menu-top { position: absolute; top: 14px; right: 16px; display: flex; gap: 8px; }
+.icon-btn {
+  font-family: var(--font-head); font-size: 15px; letter-spacing: 1.5px;
+  padding: 6px 12px; color: var(--dim); background: #1b2230;
+  border: 1px solid var(--stroke); border-radius: 6px; cursor: pointer;
+  transition: all 0.15s;
+}
+.icon-btn:hover { color: var(--text); background: #263042; }
 
 /* ------------------------------------------------------------
    Logo / loading
    ------------------------------------------------------------ */
 .logo {
   font-family: var(--font-head);
-  font-size: 84px; letter-spacing: 5px; line-height: 1;
+  font-size: 84px; letter-spacing: 6px; line-height: 1;
   color: #fff; text-shadow: 0 6px 0 #000a, 0 0 40px rgba(255,204,0,0.25);
+  font-style: italic;
 }
-.logo span { color: var(--accent); }
+.logo span {
+  color: var(--accent);
+  text-shadow: 0 6px 0 #000a, 0 0 28px rgba(255,204,0,0.55);
+}
 .logo em {
-  font-style: normal; font-size: 0.4em; letter-spacing: 3px;
-  color: var(--dim); vertical-align: middle;
+  font-style: normal; font-size: 0.32em; letter-spacing: 4px;
+  color: var(--dim); vertical-align: middle; margin-left: 10px;
+  text-shadow: none;
 }
 .logo.small { font-size: 46px; text-align: center; margin-bottom: 18px; }
 
@@ -117,6 +131,8 @@ canvas#game-canvas { position: fixed; inset: 0; width: 100%; height: 100%; displ
 .small-btn:active { transform: translateY(2px); box-shadow: none; }
 .small-btn.danger { color: #ffd7d7; background: #5a2020; box-shadow: 0 3px 0 #331010; }
 .small-btn.danger:hover { background: #732929; }
+#btn-back-game { margin-top: 22px; background: #2a3a2a; box-shadow: 0 3px 0 #162016; color: #d8f5d8; }
+#btn-back-game:hover { background: #355035; }
 
 input[type=text], select {
   width: 100%; padding: 9px 12px; font-family: var(--font); font-size: 17px;
@@ -124,6 +140,7 @@ input[type=text], select {
   border: 1px solid var(--stroke); border-radius: 6px; outline: none;
 }
 input[type=text]:focus, select:focus { border-color: var(--accent-dim); }
+select option { background: #161d2b; color: var(--text); }
 
 input[type=range] {
   -webkit-appearance: none; appearance: none;
@@ -203,7 +220,7 @@ label b { color: var(--accent); font-weight: 700; }
 .set-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 4px 26px; }
 .set-row { display: flex; align-items: center; gap: 12px; padding: 9px 2px; border-bottom: 1px solid rgba(255,255,255,0.05); }
 .set-row .sr-label { flex: 1; font-size: 15px; letter-spacing: 0.6px; }
-.set-row .sr-ctl { width: 130px; display: flex; align-items: center; gap: 8px; }
+.set-row .sr-ctl { width: 150px; display: flex; align-items: center; gap: 8px; }
 .set-row .sr-val { width: 46px; text-align: right; font-size: 13px; color: var(--accent); font-variant-numeric: tabular-nums; }
 .set-row select { padding: 5px 8px; font-size: 14px; }
 .set-head { grid-column: 1 / -1; margin: 16px 0 4px; font-family: var(--font-head); font-size: 20px; letter-spacing: 2px; color: var(--accent); }
@@ -313,6 +330,10 @@ kbd {
   color: #fff; text-shadow: 0 1px 3px #000;
 }
 .bar-wrap.small span { font-size: 12px; }
+#speedo {
+  margin-top: 6px; margin-left: 40px; font-size: 12px; letter-spacing: 1.5px;
+  color: rgba(255,255,255,0.45); font-variant-numeric: tabular-nums; text-shadow: 0 1px 2px #000;
+}
 
 /* Bottom-right ammo */
 #hud-br { position: absolute; right: 26px; bottom: 22px; text-align: right; }
@@ -375,6 +396,7 @@ kbd {
   font-family: var(--font-head); font-size: 34px; letter-spacing: 3px;
   color: var(--accent); text-shadow: 0 3px 8px #000;
   animation: toastin 0.3s ease-out;
+  white-space: nowrap;
 }
 .toast.small { font-size: 22px; color: #fff; letter-spacing: 2px; }
 .toast.fade { opacity: 0; transform: translateY(-14px); transition: all 0.5s ease; }
@@ -453,6 +475,7 @@ kbd {
   box-shadow: 0 20px 60px rgba(0,0,0,0.6);
 }
 .pause-card h2 { font-family: var(--font-head); font-size: 46px; letter-spacing: 5px; margin-bottom: 6px; }
+.pause-card .small-btn { min-width: 260px; }
 .end-card { width: min(880px, 94vw); max-height: 92vh; overflow-y: auto; }
 #end-title { font-family: var(--font-head); font-size: 60px; letter-spacing: 5px; color: var(--accent); }
 #end-sub { font-size: 19px; color: var(--dim); margin-bottom: 18px; letter-spacing: 1px; }
@@ -462,7 +485,7 @@ kbd {
 /* Perf */
 #perf {
   position: fixed; right: 8px; top: 8px; z-index: 90;
-  padding: 6px 10px; font-family: ui-monospace, Consolas, monospace; font-size: 12px; line-height: 1.5;
+  padding: 6px 10px; font-family: ui-monospace, Consolas, Menlo, monospace; font-size: 12px; line-height: 1.5;
   color: #9fe8b0; background: rgba(0,0,0,0.65); border-radius: 5px; white-space: pre;
 }
 

@@ -1,10 +1,11 @@
 // ============================================================
 // HUD: Fadenkreuz, Balken, Killfeed, Schadenszahlen, Scoreboard
+// DOM-Schreibzugriffe passieren nur, wenn sich ein Wert aendert.
 // ============================================================
 
 import * as THREE from 'three';
 import { settings } from '../core/settings.js';
-import { clamp, formatTime, lerp, damp } from '../core/utils.js';
+import { clamp, formatTime } from '../core/utils.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -44,6 +45,7 @@ export class HUD {
       death: $('deathscreen'), deathBy: $('death-by'), respawnT: $('respawn-t'),
       perf: $('perf'),
       clickHint: $('click-hint'),
+      speedo: $('speedo'),
     };
     this.slotEls = Array.from(document.querySelectorAll('#slots .slot'));
 
@@ -55,21 +57,42 @@ export class HUD {
 
     this._v = new THREE.Vector3();
     this._hpGhost = 1;
-    this._spread = 0;
-    this._lastHp = 100;
-    this._sbDirty = true;
     this._lastCross = '';
+    this._crossHidden = null;
+    this._c = {};            // Cache fuer zuletzt geschriebene DOM-Werte
+    this._perfShown = false;
+    this._perfText = '';
   }
 
   show(v) { this.el.hud.classList.toggle('hidden', !v); }
+
+  /** Setzt einen Textinhalt nur, wenn er sich geaendert hat */
+  _txt(key, el, value) {
+    if (this._c[key] === value) return;
+    this._c[key] = value;
+    el.textContent = value;
+  }
+  _style(key, el, prop, value) {
+    if (this._c[key] === value) return;
+    this._c[key] = value;
+    el.style[prop] = value;
+  }
+  _cls(key, el, cls, on) {
+    if (this._c[key] === on) return;
+    this._c[key] = on;
+    el.classList.toggle(cls, on);
+  }
 
   // --------------------------------------------------------
   // Fadenkreuz
   // --------------------------------------------------------
   updateCrosshair(spreadPx, hidden, hitTint) {
     const c = this.el;
-    if (hidden) { c.cross.style.display = 'none'; return; }
-    c.cross.style.display = '';
+    if (this._crossHidden !== hidden) {
+      this._crossHidden = hidden;
+      c.cross.style.display = hidden ? 'none' : '';
+    }
+    if (hidden) return;
 
     const size = settings.crossSize;
     const gap = settings.crossGap + spreadPx;
@@ -86,10 +109,10 @@ export class HUD {
       c.chDot.style.background = col;
       c.chDot.style.display = settings.crossDot ? '' : 'none';
     }
-    c.cross.classList.toggle('hit', !!hitTint);
+    this._cls('crossHit', c.cross, 'hit', !!hitTint);
   }
 
-  setScope(on) { this.el.scope.classList.toggle('hidden', !on); }
+  setScope(on) { this._cls('scope', this.el.scope, 'hidden', !on); }
 
   hitmarker(kind) {
     const h = this.el.hitmarker;
@@ -105,21 +128,26 @@ export class HUD {
   updateStatus(p, dt) {
     const e = this.el;
     const f = clamp(p.hp / p.maxHp, 0, 1);
-    e.hpBar.style.width = (f * 100) + '%';
-    e.hpBar.classList.toggle('low', f < 0.34);
-    e.hpText.textContent = Math.max(0, Math.ceil(p.hp));
+    this._style('hpW', e.hpBar, 'width', (Math.round(f * 1000) / 10) + '%');
+    this._cls('hpLow', e.hpBar, 'low', f < 0.34);
+    this._txt('hpT', e.hpText, String(Math.max(0, Math.ceil(p.hp))));
 
     // "Geister"-Balken laeuft verzoegert nach
     this._hpGhost = Math.max(f, this._hpGhost - dt * (this._hpGhost > f ? 0.55 : 0));
     if (this._hpGhost < f) this._hpGhost = f;
-    e.hpGhost.style.width = (this._hpGhost * 100) + '%';
+    this._style('hpG', e.hpGhost, 'width', (Math.round(this._hpGhost * 1000) / 10) + '%');
 
     const showArmor = p.maxArmor > 0 || p.armor > 0;
-    e.apLine.style.display = showArmor ? '' : 'none';
+    this._style('apD', e.apLine, 'display', showArmor ? '' : 'none');
     if (showArmor) {
       const af = clamp(p.armor / Math.max(1, p.maxArmor), 0, 1);
-      e.apBar.style.width = (af * 100) + '%';
-      e.apText.textContent = Math.max(0, Math.ceil(p.armor));
+      this._style('apW', e.apBar, 'width', (Math.round(af * 1000) / 10) + '%');
+      this._txt('apT', e.apText, String(Math.max(0, Math.ceil(p.armor))));
+    }
+
+    if (e.speedo) {
+      const spd = Math.hypot(p.vel.x, p.vel.z);
+      this._txt('spd', e.speedo, spd.toFixed(1) + ' u/s');
     }
   }
 
@@ -127,60 +155,58 @@ export class HUD {
     const e = this.el;
     const w = p.weapon;
     const s = p.ammo;
-    e.wpnName.textContent = w.name.toUpperCase();
+    this._txt('wn', e.wpnName, w.name.toUpperCase());
     if (s.mag === Infinity) {
-      e.ammoMag.textContent = '∞';
-      e.ammoRes.textContent = '';
-      e.ammo.classList.remove('empty');
+      this._txt('mag', e.ammoMag, '∞');
+      this._txt('res', e.ammoRes, '');
+      this._cls('empty', e.ammo, 'empty', false);
     } else {
-      e.ammoMag.textContent = s.mag;
-      e.ammoRes.textContent = s.reserve;
-      e.ammo.classList.toggle('empty', s.mag <= 0);
+      this._txt('mag', e.ammoMag, String(s.mag));
+      this._txt('res', e.ammoRes, String(s.reserve));
+      this._cls('empty', e.ammo, 'empty', s.mag <= 0);
     }
     const needReload = s.mag !== Infinity && s.mag <= 0 && s.reserve > 0 && p.reloadTimer <= 0;
-    e.reloadHint.classList.toggle('hidden', !needReload);
+    this._cls('rh', e.reloadHint, 'hidden', !needReload);
 
     const reloading = p.reloadTimer > 0;
-    e.reloadWrap.classList.toggle('hidden', !reloading);
+    this._cls('rw', e.reloadWrap, 'hidden', !reloading);
     if (reloading) {
       const prog = 1 - p.reloadTimer / Math.max(0.01, p.reloadTotal);
-      e.reloadBar.style.width = (prog * 100) + '%';
+      this._style('rb', e.reloadBar, 'width', Math.round(prog * 100) + '%');
     }
 
     for (let i = 0; i < this.slotEls.length; i++) {
       const el = this.slotEls[i];
       if (i < p.slots.length) {
-        el.classList.toggle('active', i === p.slot);
+        this._cls('sa' + i, el, 'active', i === p.slot);
         const sl = p.slots[i];
-        el.querySelector('span').textContent = sl.w.short;
-        el.classList.toggle('empty', sl.mag !== Infinity && sl.mag <= 0 && sl.reserve <= 0);
+        this._txt('sn' + i, el.querySelector('span'), sl.w.short);
+        this._cls('se' + i, el, 'empty', sl.mag !== Infinity && sl.mag <= 0 && sl.reserve <= 0);
       }
     }
-    e.nadeCount.textContent = p.nades;
-    this.slotEls[3].classList.toggle('empty', p.nades <= 0);
+    this._txt('nc', e.nadeCount, String(p.nades));
+    this._cls('ne', this.slotEls[3], 'empty', p.nades <= 0);
   }
 
   updateStats(p) {
-    this.el.stK.textContent = p.kills;
-    this.el.stD.textContent = p.deaths;
-    this.el.stS.textContent = p.score;
-    this.el.ksLine.classList.toggle('hidden', p.streak < 2);
-    this.el.ksCount.textContent = p.streak;
+    this._txt('k', this.el.stK, String(p.kills));
+    this._txt('d', this.el.stD, String(p.deaths));
+    this._txt('s', this.el.stS, String(p.score));
+    this._cls('ks', this.el.ksLine, 'hidden', p.streak < 2);
+    this._txt('ksc', this.el.ksCount, String(p.streak));
   }
 
   updateMatch(mode, redScore, blueScore, timeLeft) {
     const e = this.el;
-    if (mode === 'ffa') {
-      e.scoreRed.parentElement.style.display = 'none';
-      e.scoreBlue.parentElement.style.display = 'none';
-    } else {
-      e.scoreRed.parentElement.style.display = '';
-      e.scoreBlue.parentElement.style.display = '';
-      e.scoreRed.textContent = redScore;
-      e.scoreBlue.textContent = blueScore;
+    const ffa = mode === 'ffa';
+    this._style('tr', e.scoreRed.parentElement, 'display', ffa ? 'none' : '');
+    this._style('tb', e.scoreBlue.parentElement, 'display', ffa ? 'none' : '');
+    if (!ffa) {
+      this._txt('sr', e.scoreRed, String(redScore));
+      this._txt('sb', e.scoreBlue, String(blueScore));
     }
-    e.timer.textContent = formatTime(timeLeft);
-    e.timer.classList.toggle('urgent', timeLeft <= 30);
+    this._txt('tm', e.timer, formatTime(timeLeft));
+    this._cls('tu', e.timer, 'urgent', timeLeft <= 30);
   }
 
   // --------------------------------------------------------
@@ -235,6 +261,7 @@ export class HUD {
     el.className = 'popup' + (kind ? ' ' + kind : '');
     el.textContent = text;
     el.style.opacity = '1';
+    el.style.display = '';
     this.el.popups.appendChild(el);
     this.popups.push({ el, x, y, z, t: 0, life: 1.0, ox: (Math.random() - 0.5) * 26 });
   }
@@ -247,6 +274,7 @@ export class HUD {
     wrap.innerHTML = '<i></i>';
     this.el.dmgDirs.appendChild(wrap);
     this.dmgDirs.push({ el: wrap, t: 1.1 });
+    while (this.dmgDirs.length > 8) { const o = this.dmgDirs.shift(); o.el.remove(); }
   }
 
   damageFlash(intensity) {
@@ -258,6 +286,7 @@ export class HUD {
   // --------------------------------------------------------
   updateFloating(dt, camera) {
     // Schadenszahlen
+    const W = window.innerWidth, H = window.innerHeight;
     for (let i = this.popups.length - 1; i >= 0; i--) {
       const p = this.popups[i];
       p.t += dt;
@@ -270,10 +299,10 @@ export class HUD {
       this._v.set(p.x, p.y + p.t * 1.1, p.z).project(camera);
       if (this._v.z > 1) { p.el.style.display = 'none'; continue; }
       p.el.style.display = '';
-      const sx = (this._v.x * 0.5 + 0.5) * window.innerWidth + p.ox;
-      const sy = (-this._v.y * 0.5 + 0.5) * window.innerHeight;
+      const sx = (this._v.x * 0.5 + 0.5) * W + p.ox;
+      const sy = (-this._v.y * 0.5 + 0.5) * H;
       const k = p.t / p.life;
-      p.el.style.transform = `translate(-50%,-50%) translate(${sx}px, ${sy - k * 22}px) scale(${1 + (1 - k) * 0.25})`;
+      p.el.style.transform = `translate(-50%,-50%) translate(${sx.toFixed(1)}px, ${(sy - k * 22).toFixed(1)}px) scale(${(1 + (1 - k) * 0.25).toFixed(3)})`;
       p.el.style.opacity = String(clamp(1 - k * k, 0, 1));
     }
 
@@ -311,6 +340,9 @@ export class HUD {
     this.toastItems.length = 0;
     for (const d of this.dmgDirs) d.el.remove();
     this.dmgDirs.length = 0;
+    this._c = {};
+    this._lastCross = '';
+    this._crossHidden = null;
   }
 
   // --------------------------------------------------------
@@ -327,7 +359,7 @@ export class HUD {
     }
     this.el.respawnT.textContent = t.toFixed(1);
   }
-  updateDeathTimer(t) { this.el.respawnT.textContent = Math.max(0, t).toFixed(1); }
+  updateDeathTimer(t) { this._txt('rt', this.el.respawnT, Math.max(0, t).toFixed(1)); }
   hideDeath() { this.el.death.classList.add('hidden'); }
 
   // --------------------------------------------------------
@@ -338,7 +370,7 @@ export class HUD {
   renderScoreboard(game) {
     const e = this.el;
     e.sbMode.textContent = game.mode === 'ffa' ? 'FREE FOR ALL' : 'TEAM DEATHMATCH';
-    e.sbMap.textContent = game.world.map.name;
+    e.sbMap.textContent = game.world ? game.world.map.name : '';
 
     const rows = (list) => list.map((a) => {
       const pingCls = a.ping < 60 ? 'ping-good' : 'ping-bad';
@@ -372,8 +404,14 @@ export class HUD {
 
   // --------------------------------------------------------
   setPerf(text, show) {
-    this.el.perf.classList.toggle('hidden', !show);
-    if (show) this.el.perf.textContent = text;
+    if (this._perfShown !== show) {
+      this._perfShown = show;
+      this.el.perf.classList.toggle('hidden', !show);
+    }
+    if (show && text !== this._perfText) {
+      this._perfText = text;
+      this.el.perf.textContent = text;
+    }
   }
 
   setMinimapVisible(v) { this.el.minimapWrap.classList.toggle('hidden', !v); }

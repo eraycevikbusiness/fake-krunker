@@ -3,8 +3,8 @@
 // Kampfverhalten je nach Waffentyp und Schwierigkeitsgrad
 // ============================================================
 
-import { Actor, PHYS } from './actor.js';
-import { clamp, damp, rand, randSign, angleDelta, pick, gauss } from '../core/utils.js';
+import { Actor } from './actor.js';
+import { clamp, rand, randSign, angleDelta, pick, gauss } from '../core/utils.js';
 
 export const DIFFICULTY = [
   {
@@ -50,8 +50,6 @@ export class Bot extends Actor {
     this.goal = null;
     this.moveGoal = null;
 
-    this.aimYaw = 0;
-    this.aimPitch = 0;
     this.noiseT = rand(0, 100);
     this.noiseYaw = 0;
     this.noisePitch = 0;
@@ -68,7 +66,7 @@ export class Bot extends Actor {
 
     this.thinkTimer = rand(0, 0.15);
     this.preferDist = 18;
-    this._hb = [];
+    this.intent.autoJump = false;
   }
 
   spawn(point) {
@@ -80,11 +78,10 @@ export class Bot extends Actor {
     this.goal = null;
     this.moveGoal = null;
     this.repathTimer = 0;
-    this.aimYaw = this.yaw;
-    this.aimPitch = 0;
     this.burstLeftAI = 0;
     this.pauseTimer = 0;
     this.stuckTimer = 0;
+    this.lastPos.x = point.x; this.lastPos.y = point.y; this.lastPos.z = point.z;
     this._updatePreferredRange();
   }
 
@@ -159,7 +156,7 @@ export class Bot extends Actor {
       // Blickfeld (Bots "hoeren" nahe Gegner auch hinter sich)
       const ang = Math.abs(angleDelta(this.yaw, Math.atan2(-dx, -dz)));
       const inFov = ang < 1.5 || dist < d.hearRange * 0.5;
-      const noisy = (a.game.time - (a.lastLoudTime || -99)) < 1.2 && dist < d.hearRange;
+      const noisy = (g.time - (a.lastLoudTime || -99)) < 1.2 && dist < d.hearRange;
       if (!inFov && !noisy) continue;
 
       // Sichtlinie zur Brust
@@ -312,7 +309,7 @@ export class Bot extends Actor {
 
       // Zielpunkt: Brust, mit Chance auf Kopf
       const aimHead = Math.random() < d.hsChance * 0.15;
-      const hOff = aimHead ? t.height * 0.88 : t.height * (0.6 + gauss(0.07));
+      const hOff = aimHead ? t.height * 0.88 : t.height * (0.58 + gauss(0.06));
       tx = px; ty = py + hOff; tz = pz;
 
       // Vorhalten (Projektile / Reaktionslatenz)
@@ -397,7 +394,7 @@ export class Bot extends Actor {
 
     if (this.unstuckTimer > 0) {
       // Ausweichbewegung
-      dirX = Math.sin(this.game.time * 4 + this.id) ;
+      dirX = Math.sin(this.game.time * 4 + this.id);
       dirZ = Math.cos(this.game.time * 4 + this.id);
       haveDir = true;
     }
@@ -440,7 +437,7 @@ export class Bot extends Actor {
       }
     }
 
-    // Slide beim Sprinten bergab/lange Strecken
+    // Slide beim Sprinten (gute Bots)
     if (this.diff.strafeSkill > 0.7 && this.state === STATE.FIGHT &&
         this.grounded && Math.hypot(this.vel.x, this.vel.z) > 9 && Math.random() < 0.004) {
       it.crouch = true;
@@ -483,6 +480,7 @@ export class Bot extends Actor {
 
     if (!this.target) return;
     const t = this.target;
+    // targetSeenAt wird nur mit freier Sichtlinie gesetzt (siehe _think)
     const seen = (this.game.time - this.targetSeenAt) < 0.12;
     if (!seen) return;
 
@@ -510,7 +508,7 @@ export class Bot extends Actor {
     }
 
     // Zielen (ADS) bei Distanzwaffen
-    if (!w.melee && dist > 14 && (w.id === 'sniper' || w.id === 'marksman' || w.id === 'burst' || w.id === 'ar')) {
+    if (dist > 14 && (w.id === 'sniper' || w.id === 'marksman' || w.id === 'burst' || w.id === 'ar')) {
       it.ads = true;
     }
 
@@ -523,7 +521,6 @@ export class Bot extends Actor {
     const maxEff = w.falloffEnd * 1.1;
     if (dist > maxEff) return;
     if (angErr > d.fireAngle + (w.pellets > 1 ? 0.05 : 0)) return;
-    if (!world.losClear(eye.x, eye.y, eye.z, t.pos.x, ty, t.pos.z)) return;
 
     // Feuerpausen simulieren (Rueckstosskontrolle)
     if (this.pauseTimer > 0) { this.pauseTimer -= dt; return; }

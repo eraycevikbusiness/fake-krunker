@@ -1,5 +1,5 @@
 // ============================================================
-// Welt: Geometrie-Bau, Kollision, Raycast, Navigation
+// Welt: Geometrie-Bau, Kollision, Raycast (Grid-DDA), Navigation
 // ============================================================
 
 import * as THREE from 'three';
@@ -55,33 +55,25 @@ const FACES = [
   { k: 'pz', n: [0, 0, 1], v: [[0,0,1],[1,0,1],[1,1,1],[0,1,1]], ua: 'x', va: 'y' },
   { k: 'nz', n: [0, 0, -1], v: [[1,0,0],[0,0,0],[0,1,0],[1,1,0]], ua: 'x', va: 'y' },
 ];
+const UV_CORNERS = [[0, 0], [1, 0], [1, 1], [0, 1]];
 
-function pushBox(A, min, max, color, uvScale, tint) {
+function pushBox(A, min, max, color, uvScale, tint, skipBottom) {
   const size = { x: max.x - min.x, y: max.y - min.y, z: max.z - min.z };
   for (const f of FACES) {
+    if (skipBottom && f.k === 'ny') continue;     // Unterseiten am Boden sieht nie jemand
     const t = tint ? FACE_TINT[f.k] : 1;
     const r = ((color >> 16) & 255) / 255 * t;
     const g = ((color >> 8) & 255) / 255 * t;
     const b = (color & 255) / 255 * t;
     const base = A.pos.length / 3;
-    for (const v of f.v) {
-      A.pos.push(
-        v[0] ? max.x : min.x,
-        v[1] ? max.y : min.y,
-        v[2] ? max.z : min.z
-      );
-      A.nor.push(f.n[0], f.n[1], f.n[2]);
-      A.col.push(r, g, b);
-      A.uv.push(0, 0); // wird gleich ueberschrieben
-    }
-    // UVs in Weltmass
     const uSize = size[f.ua] * uvScale;
     const vSize = size[f.va] * uvScale;
-    const uvIdx = base * 2;
-    const corners = [[0, 0], [1, 0], [1, 1], [0, 1]];
     for (let i = 0; i < 4; i++) {
-      A.uv[uvIdx + i * 2] = corners[i][0] * uSize;
-      A.uv[uvIdx + i * 2 + 1] = corners[i][1] * vSize;
+      const v = f.v[i];
+      A.pos.push(v[0] ? max.x : min.x, v[1] ? max.y : min.y, v[2] ? max.z : min.z);
+      A.nor.push(f.n[0], f.n[1], f.n[2]);
+      A.col.push(r, g, b);
+      A.uv.push(UV_CORNERS[i][0] * uSize, UV_CORNERS[i][1] * vSize);
     }
     A.idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
   }
@@ -95,6 +87,7 @@ function buildGeometry(arrays) {
   g.setAttribute('uv', new THREE.Float32BufferAttribute(arrays.uv, 2));
   g.setIndex(arrays.idx);
   g.computeBoundingSphere();
+  g.computeBoundingBox();
   return g;
 }
 
@@ -189,8 +182,8 @@ export class World {
         color = (r << 16) | (g << 8) | b;
       }
 
-      if (box.emissive) pushBox(glow, min, max, box.color, 0.25, false);
-      else pushBox(solid, min, max, color, 0.25, true);
+      if (box.emissive) pushBox(glow, min, max, box.color, 0.25, false, box.by <= 0.001);
+      else pushBox(solid, min, max, color, 0.25, true, box.by <= 0.001);
 
       if (!box.noCollide) {
         this.colliders.push({
@@ -198,6 +191,7 @@ export class World {
           maxx: max.x, maxy: max.y, maxz: max.z,
           cx: box.cx, cy: box.by + box.h / 2, cz: box.cz,
           rad: Math.sqrt(box.w * box.w + box.h * box.h + box.d * box.d) * 0.5,
+          _i: 0,
         });
       }
     }
@@ -210,6 +204,7 @@ export class World {
     this.meshSolid = new THREE.Mesh(buildGeometry(solid), matSolid);
     this.meshSolid.castShadow = true;
     this.meshSolid.receiveShadow = true;
+    this.meshSolid.frustumCulled = false;
     this.group.add(this.meshSolid);
 
     if (glow.pos.length) {
@@ -241,6 +236,7 @@ export class World {
     });
     this.sky = new THREE.Mesh(geo, mat);
     this.sky.renderOrder = -1000;
+    this.sky.frustumCulled = false;
     this.group.add(this.sky);
   }
 
@@ -261,7 +257,7 @@ export class World {
       const shade = 0.55 + rng() * 0.3;
       const col = new THREE.Color(base.r * shade, base.g * shade, base.b * shade);
       const hex = (Math.round(col.r * 255) << 16) | (Math.round(col.g * 255) << 8) | Math.round(col.b * 255);
-      pushBox(A, { x: x - w / 2, y: -6, z: z - w / 2 }, { x: x + w / 2, y: h, z: z + w / 2 }, hex, 0.15, true);
+      pushBox(A, { x: x - w / 2, y: -6, z: z - w / 2 }, { x: x + w / 2, y: h, z: z + w / 2 }, hex, 0.15, true, true);
     }
     const mesh = new THREE.Mesh(
       buildGeometry(A),
@@ -278,10 +274,14 @@ export class World {
 
   _buildBroadphase() {
     const cs = this.cell;
+    let gx0 = Infinity, gx1 = -Infinity, gz0 = Infinity, gz1 = -Infinity;
     for (let i = 0; i < this.colliders.length; i++) {
       const c = this.colliders[i];
+      c._i = i;
       const x0 = Math.floor(c.minx / cs), x1 = Math.floor(c.maxx / cs);
       const z0 = Math.floor(c.minz / cs), z1 = Math.floor(c.maxz / cs);
+      if (x0 < gx0) gx0 = x0; if (x1 > gx1) gx1 = x1;
+      if (z0 < gz0) gz0 = z0; if (z1 > gz1) gz1 = z1;
       for (let ix = x0; ix <= x1; ix++) {
         for (let iz = z0; iz <= z1; iz++) {
           const k = this._key(ix, iz);
@@ -291,9 +291,11 @@ export class World {
         }
       }
     }
+    this.gx0 = gx0; this.gx1 = gx1; this.gz0 = gz0; this.gz1 = gz1;
     this._queryMark = new Int32Array(this.colliders.length);
-    for (let i = 0; i < this.colliders.length; i++) this.colliders[i]._i = i;
     this._queryStamp = 0;
+    this._rayMark = new Int32Array(this.colliders.length);
+    this._rayStamp = 0;
   }
 
   /** Alle Collider, die die AABB beruehren koennten */
@@ -301,16 +303,17 @@ export class World {
     out.length = 0;
     const cs = this.cell;
     const stamp = ++this._queryStamp;
-    const x0 = Math.floor(minx / cs), x1 = Math.floor(maxx / cs);
-    const z0 = Math.floor(minz / cs), z1 = Math.floor(maxz / cs);
+    const mark = this._queryMark;
+    const x0 = Math.max(this.gx0, Math.floor(minx / cs)), x1 = Math.min(this.gx1, Math.floor(maxx / cs));
+    const z0 = Math.max(this.gz0, Math.floor(minz / cs)), z1 = Math.min(this.gz1, Math.floor(maxz / cs));
     for (let ix = x0; ix <= x1; ix++) {
       for (let iz = z0; iz <= z1; iz++) {
         const arr = this.grid.get(this._key(ix, iz));
         if (!arr) continue;
         for (let i = 0; i < arr.length; i++) {
           const c = arr[i];
-          if (this._queryMark[c._i] === stamp) continue;
-          this._queryMark[c._i] = stamp;
+          if (mark[c._i] === stamp) continue;
+          mark[c._i] = stamp;
           out.push(c);
         }
       }
@@ -319,7 +322,9 @@ export class World {
   }
 
   // --------------------------------------------------------
-  // Raycast gegen alle Weltboxen (Slab-Test)
+  // Raycast gegen alle Weltboxen: 2D-Grid-Traversal (DDA) ueber die
+  // Broadphase-Zellen, in jeder Zelle Slab-Test. Bricht ab, sobald ein
+  // Treffer vor dem Zellausgang liegt -> nur ein Bruchteil aller Boxen.
   // --------------------------------------------------------
   /**
    * @returns null oder {t, x,y,z, nx,ny,nz}
@@ -329,48 +334,80 @@ export class World {
     let bnx = 0, bny = 0, bnz = 0;
     let hit = false;
 
-    const invx = dx !== 0 ? 1 / dx : Infinity;
-    const invy = dy !== 0 ? 1 / dy : Infinity;
-    const invz = dz !== 0 ? 1 / dz : Infinity;
+    const invx = dx !== 0 ? 1 / dx : 1e30;
+    const invy = dy !== 0 ? 1 / dy : 1e30;
+    const invz = dz !== 0 ? 1 / dz : 1e30;
 
-    const list = this.colliders;
-    for (let i = 0; i < list.length; i++) {
-      const c = list[i];
-      // Schnellverwerfung: Abstand Strahl <-> Boxmittelpunkt
-      const mx = c.cx - ox, my = c.cy - oy, mz = c.cz - oz;
-      const proj = mx * dx + my * dy + mz * dz;
-      if (proj < -c.rad || proj > bestT + c.rad) continue;
-      const px = mx - dx * proj, py = my - dy * proj, pz = mz - dz * proj;
-      if (px * px + py * py + pz * pz > c.rad * c.rad) continue;
+    const cs = this.cell;
+    const grid = this.grid;
+    const mark = this._rayMark;
+    const stamp = ++this._rayStamp;
+    const gx0 = this.gx0, gx1 = this.gx1, gz0 = this.gz0, gz1 = this.gz1;
 
-      let tmin = 0, tmax = bestT;
-      let ax = -1, sgn = 0;
+    let ix = Math.floor(ox / cs), iz = Math.floor(oz / cs);
+    const stepX = dx > 0 ? 1 : dx < 0 ? -1 : 0;
+    const stepZ = dz > 0 ? 1 : dz < 0 ? -1 : 0;
+    const tDeltaX = stepX !== 0 ? cs / Math.abs(dx) : Infinity;
+    const tDeltaZ = stepZ !== 0 ? cs / Math.abs(dz) : Infinity;
+    let tMaxX = stepX > 0 ? ((ix + 1) * cs - ox) / dx : stepX < 0 ? (ix * cs - ox) / dx : Infinity;
+    let tMaxZ = stepZ > 0 ? ((iz + 1) * cs - oz) / dz : stepZ < 0 ? (iz * cs - oz) / dz : Infinity;
 
-      let t1 = (c.minx - ox) * invx, t2 = (c.maxx - ox) * invx;
-      if (t1 > t2) { const t = t1; t1 = t2; t2 = t; }
-      if (t1 > tmin) { tmin = t1; ax = 0; sgn = dx > 0 ? -1 : 1; }
-      if (t2 < tmax) tmax = t2;
-      if (tmin > tmax) continue;
+    for (let guard = 0; guard < 512; guard++) {
+      if (ix >= gx0 && ix <= gx1 && iz >= gz0 && iz <= gz1) {
+        const arr = grid.get(this._key(ix, iz));
+        if (arr) {
+          for (let i = 0; i < arr.length; i++) {
+            const c = arr[i];
+            if (mark[c._i] === stamp) continue;
+            mark[c._i] = stamp;
 
-      t1 = (c.miny - oy) * invy; t2 = (c.maxy - oy) * invy;
-      if (t1 > t2) { const t = t1; t1 = t2; t2 = t; }
-      if (t1 > tmin) { tmin = t1; ax = 1; sgn = dy > 0 ? -1 : 1; }
-      if (t2 < tmax) tmax = t2;
-      if (tmin > tmax) continue;
+            // Schnellverwerfung: Abstand Strahl <-> Boxmittelpunkt
+            const mx = c.cx - ox, my = c.cy - oy, mz = c.cz - oz;
+            const proj = mx * dx + my * dy + mz * dz;
+            if (proj < -c.rad || proj > bestT + c.rad) continue;
+            const px = mx - dx * proj, py = my - dy * proj, pz = mz - dz * proj;
+            if (px * px + py * py + pz * pz > c.rad * c.rad) continue;
 
-      t1 = (c.minz - oz) * invz; t2 = (c.maxz - oz) * invz;
-      if (t1 > t2) { const t = t1; t1 = t2; t2 = t; }
-      if (t1 > tmin) { tmin = t1; ax = 2; sgn = dz > 0 ? -1 : 1; }
-      if (t2 < tmax) tmax = t2;
-      if (tmin > tmax) continue;
+            let tmin = 0, tmax = bestT;
+            let ax = -1, sgn = 0;
 
-      if (tmin >= 0 && tmin < bestT) {
-        bestT = tmin;
-        bnx = ax === 0 ? sgn : 0;
-        bny = ax === 1 ? sgn : 0;
-        bnz = ax === 2 ? sgn : 0;
-        hit = true;
+            let t1 = (c.minx - ox) * invx, t2 = (c.maxx - ox) * invx;
+            if (t1 > t2) { const t = t1; t1 = t2; t2 = t; }
+            if (t1 > tmin) { tmin = t1; ax = 0; sgn = dx > 0 ? -1 : 1; }
+            if (t2 < tmax) tmax = t2;
+            if (tmin > tmax) continue;
+
+            t1 = (c.miny - oy) * invy; t2 = (c.maxy - oy) * invy;
+            if (t1 > t2) { const t = t1; t1 = t2; t2 = t; }
+            if (t1 > tmin) { tmin = t1; ax = 1; sgn = dy > 0 ? -1 : 1; }
+            if (t2 < tmax) tmax = t2;
+            if (tmin > tmax) continue;
+
+            t1 = (c.minz - oz) * invz; t2 = (c.maxz - oz) * invz;
+            if (t1 > t2) { const t = t1; t1 = t2; t2 = t; }
+            if (t1 > tmin) { tmin = t1; ax = 2; sgn = dz > 0 ? -1 : 1; }
+            if (t2 < tmax) tmax = t2;
+            if (tmin > tmax) continue;
+
+            if (tmin >= 0 && tmin < bestT) {
+              bestT = tmin;
+              bnx = ax === 0 ? sgn : 0;
+              bny = ax === 1 ? sgn : 0;
+              bnz = ax === 2 ? sgn : 0;
+              hit = true;
+            }
+          }
+        }
       }
+
+      const tExit = tMaxX < tMaxZ ? tMaxX : tMaxZ;
+      if (bestT <= tExit) break;          // Treffer liegt noch in dieser Zelle
+      if (tExit >= maxDist) break;
+      if (tMaxX < tMaxZ) { ix += stepX; tMaxX += tDeltaX; }
+      else { iz += stepZ; tMaxZ += tDeltaZ; }
+      // Raster verlassen und entfernt sich weiter -> fertig
+      if ((ix < gx0 && stepX <= 0) || (ix > gx1 && stepX >= 0) ||
+          (iz < gz0 && stepZ <= 0) || (iz > gz1 && stepZ >= 0)) break;
     }
 
     if (!hit) return null;
@@ -406,11 +443,12 @@ export class World {
 
   /**
    * Bewegt eine Akteur-AABB um delta und loest Kollisionen auf.
-   * actor: {x,y,z} wird mutiert.
-   * @returns {ground:boolean, ceiling:boolean, wallX:boolean, wallZ:boolean, stepped:number}
+   * p: {x,y,z} wird mutiert.
+   * @returns {ground, ceiling, wallX, wallZ, stepped}
    */
   moveActor(p, dx, dy, dz, r, h, stepH) {
-    const res = { ground: false, ceiling: false, wallX: false, wallZ: false, stepped: 0 };
+    const res = this._moveRes || (this._moveRes = { ground: false, ceiling: false, wallX: false, wallZ: false, stepped: 0 });
+    res.ground = false; res.ceiling = false; res.wallX = false; res.wallZ = false; res.stepped = 0;
     const list = this._tmpList2 || (this._tmpList2 = []);
 
     // ---------- X ----------
@@ -425,7 +463,7 @@ export class World {
         // Stufe hochsteigen?
         const rise = c.maxy - p.y;
         if (stepH > 0 && rise > 0.01 && rise <= stepH && this.isFree(p.x, c.maxy + 0.02, p.z, r, h)) {
-          p.y = c.maxy + 0.02; res.stepped = rise; res.ground = true; continue;
+          p.y = c.maxy + 0.02; res.stepped += rise; res.ground = true; continue;
         }
         p.x = dx > 0 ? c.minx - r - EPS : c.maxx + r + EPS;
         res.wallX = true;
@@ -443,7 +481,7 @@ export class World {
         if (p.x + r <= c.minx + EPS || p.x - r >= c.maxx - EPS) continue;
         const rise = c.maxy - p.y;
         if (stepH > 0 && rise > 0.01 && rise <= stepH && this.isFree(p.x, c.maxy + 0.02, p.z, r, h)) {
-          p.y = c.maxy + 0.02; res.stepped = rise; res.ground = true; continue;
+          p.y = c.maxy + 0.02; res.stepped += rise; res.ground = true; continue;
         }
         p.z = dz > 0 ? c.minz - r - EPS : c.maxz + r + EPS;
         res.wallZ = true;
@@ -639,6 +677,7 @@ export class World {
       fScore: new Float32Array(nodes.length),
       came: new Int32Array(nodes.length),
       state: new Int32Array(nodes.length),
+      state2: new Int32Array(nodes.length),
       stamp: 0,
       heap: new Heap(),
     };
@@ -659,7 +698,8 @@ export class World {
           if (jx < 0 || jz < 0 || jx >= nav.n || jz >= nav.n) continue;
           const arr = nav.cellNodes[jz * nav.n + jx];
           if (!arr) continue;
-          for (const nd of arr) {
+          for (let k = 0; k < arr.length; k++) {
+            const nd = arr[k];
             const d = (nd.x - x) ** 2 + (nd.z - z) ** 2 + (nd.y - y) ** 2 * 3;
             if (d < bestD) { bestD = d; best = nd; }
           }
@@ -693,7 +733,7 @@ export class World {
     heap.push(start, H(start));
 
     let expanded = 0;
-    const closed = nav.state2 || (nav.state2 = new Int32Array(nav.nodes.length));
+    const closed = nav.state2;
 
     while (heap.size) {
       const cur = heap.pop();

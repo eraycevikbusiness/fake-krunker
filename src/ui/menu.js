@@ -4,12 +4,12 @@
 
 import { CLASSES } from '../game/weapons.js';
 import { DIFFICULTY } from '../game/bot.js';
-import { settings, buildSettingsUI, saveSettings, resetSettings } from '../core/settings.js';
+import { buildSettingsUI, resetSettings } from '../core/settings.js';
 import { audio } from '../core/audio.js';
-import { formatTime } from '../core/utils.js';
 
 const $ = (id) => document.getElementById(id);
-const LS = 'krunkerclone.profile.v1';
+const LS = 'fragstorm.profile.v1';
+const LS_LEGACY = 'krunkerclone.profile.v1';
 
 const STAT_LABELS = {
   schaden: 'SCHADEN', feuerrate: 'FEUERRATE', reichweite: 'REICHWEITE', mobilitaet: 'MOBILITÄT',
@@ -19,6 +19,7 @@ export class Menu {
   constructor(handlers) {
     this.h = handlers;
     this.classId = 'triggerman';
+    this.inGame = false;
     this.el = {
       menu: $('menu'), loading: $('loading'), pause: $('pause'), end: $('endscreen'),
       classGrid: $('class-grid'), classDetail: $('class-detail'),
@@ -27,6 +28,7 @@ export class Menu {
       bots: $('opt-bots'), diff: $('opt-diff'), limit: $('opt-limit'), timeL: $('opt-time'),
       lblBots: $('lbl-bots'), lblDiff: $('lbl-diff'), lblLimit: $('lbl-limit'), lblTime: $('lbl-time'),
       endTitle: $('end-title'), endSub: $('end-sub'), endBoard: $('end-board'),
+      backGame: $('btn-back-game'), classHint: $('class-hint'),
     };
 
     this._loadProfile();
@@ -50,8 +52,18 @@ export class Menu {
     $('btn-settings-ingame').addEventListener('click', () => {
       audio.uiClick();
       this.hidePause();
-      this.showMenu('settings');
+      this.showMenu('settings', true);
       this.h.onOpenSettings && this.h.onOpenSettings();
+    });
+    $('btn-class-ingame').addEventListener('click', () => {
+      audio.uiClick();
+      this.hidePause();
+      this.showMenu('class', true);
+      this.h.onOpenSettings && this.h.onOpenSettings();
+    });
+    this.el.backGame.addEventListener('click', () => {
+      audio.uiClick();
+      this.h.onBackToGame && this.h.onBackToGame();
     });
     $('btn-quit').addEventListener('click', () => { audio.uiClick(); this.h.onQuit && this.h.onQuit(); });
     $('btn-again').addEventListener('click', () => {
@@ -62,8 +74,12 @@ export class Menu {
     $('btn-tomenu').addEventListener('click', () => {
       audio.uiClick();
       this.hideEnd();
-      this.showMenu('play');
+      this.h.onQuit && this.h.onQuit();
     });
+    for (const id of ['btn-fullscreen', 'btn-fullscreen-pause']) {
+      const b = $(id);
+      if (b) b.addEventListener('click', () => { audio.uiClick(); this.h.onFullscreen && this.h.onFullscreen(); });
+    }
 
     // Hover-Sounds
     document.querySelectorAll('button, .class-card').forEach((b) => {
@@ -76,12 +92,16 @@ export class Menu {
     document.querySelectorAll('.menu-tabs .tab').forEach((t) => {
       t.addEventListener('click', () => {
         audio.uiClick();
-        document.querySelectorAll('.menu-tabs .tab').forEach(x => x.classList.remove('active'));
-        document.querySelectorAll('.tabpane').forEach(x => x.classList.remove('active'));
-        t.classList.add('active');
-        $('pane-' + t.dataset.tab).classList.add('active');
+        this._activateTab(t.dataset.tab);
       });
     });
+  }
+
+  _activateTab(tab) {
+    document.querySelectorAll('.menu-tabs .tab').forEach(x => x.classList.toggle('active', x.dataset.tab === tab));
+    document.querySelectorAll('.tabpane').forEach(x => x.classList.remove('active'));
+    const pane = $('pane-' + tab);
+    if (pane) pane.classList.add('active');
   }
 
   _buildClasses() {
@@ -138,6 +158,8 @@ export class Menu {
     };
     [e.bots, e.diff, e.limit, e.timeL].forEach((el) => el.addEventListener('input', () => { upd(); this._saveProfile(); }));
     [e.name, e.mode, e.map].forEach((el) => el.addEventListener('change', () => this._saveProfile()));
+    // Enter im Namensfeld startet das Spiel
+    e.name.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); $('btn-play').click(); } });
     upd();
   }
 
@@ -157,17 +179,17 @@ export class Menu {
 
   _loadProfile() {
     try {
-      const raw = localStorage.getItem(LS);
+      const raw = localStorage.getItem(LS) || localStorage.getItem(LS_LEGACY);
       if (!raw) return;
       const p = JSON.parse(raw);
-      if (p.name) this.el.name.value = p.name;
+      if (p.name) this.el.name.value = String(p.name).slice(0, 16);
       if (p.mode) this.el.mode.value = p.mode;
       if (p.map) this.el.map.value = p.map;
       if (p.bots) this.el.bots.value = p.bots;
       if (p.difficulty !== undefined) this.el.diff.value = p.difficulty;
       if (p.scoreLimit) this.el.limit.value = p.scoreLimit;
       if (p.timeLimit) this.el.timeL.value = p.timeLimit;
-      if (p.classId) this.classId = p.classId;
+      if (p.classId && CLASSES.some(c => c.id === p.classId)) this.classId = p.classId;
     } catch (err) { /* ignorieren */ }
   }
 
@@ -182,13 +204,13 @@ export class Menu {
     if (text) $('loadtext').textContent = text;
   }
 
-  showMenu(tab) {
+  /** tab: play | class | settings | controls; inGame: Match laeuft (Zurueck-Button zeigen) */
+  showMenu(tab, inGame) {
+    this.inGame = !!inGame;
     this.el.menu.classList.remove('hidden');
-    if (tab) {
-      document.querySelectorAll('.menu-tabs .tab').forEach(x => x.classList.toggle('active', x.dataset.tab === tab));
-      document.querySelectorAll('.tabpane').forEach(x => x.classList.remove('active'));
-      $('pane-' + tab).classList.add('active');
-    }
+    this.el.backGame.classList.toggle('hidden', !this.inGame);
+    if (this.el.classHint) this.el.classHint.classList.toggle('hidden', !this.inGame);
+    if (tab) this._activateTab(tab);
   }
   hideMenu() { this.el.menu.classList.add('hidden'); }
   get menuVisible() { return !this.el.menu.classList.contains('hidden'); }

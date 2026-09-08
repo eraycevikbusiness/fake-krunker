@@ -3,9 +3,13 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
-<title>KRUNKER CLONE — Browser FPS</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230d1017'/%3E%3Ctext x='16' y='23' font-family='Arial' font-size='20' font-weight='bold' text-anchor='middle' fill='%23ffcc00'%3EK%3C/text%3E%3C/svg%3E" />
+<meta name="color-scheme" content="dark" />
+<title>FRAGSTORM — Arena FPS</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230d1017'/%3E%3Cpath d='M9 6h15v5H14v4h9v5h-9v6H9z' fill='%23ffcc00'/%3E%3C/svg%3E" />
 <link rel="stylesheet" href="./css/style.css" />
+<!-- Schriften nicht-blockierend laden: ohne Internet greift sofort der Fallback -->
+<link rel="preconnect" href="https://fonts.googleapis.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Rajdhani:wght@500;600;700&display=swap" media="print" onload="this.media='all'" />
 <script type="importmap">
 { "imports": { "three": "./libs/three.module.js" } }
 </script>
@@ -17,7 +21,7 @@
 
 <!-- ================= LOADING ================= -->
 <div id="loading" class="overlay">
-  <div class="logo">KR<span>U</span>NKER</div>
+  <div class="logo">FRAG<span>STORM</span></div>
   <div class="loadbar"><div id="loadbar-fill"></div></div>
   <div id="loadtext" class="dim">Lade Engine…</div>
 </div>
@@ -46,6 +50,7 @@
       <div class="stat-ico ap">AP</div>
       <div class="bar-wrap small"><div id="ap-bar"></div><span id="ap-text">0</span></div>
     </div>
+    <div id="speedo">0 u/s</div>
   </div>
 
   <div id="hud-br">
@@ -105,7 +110,10 @@
 <div id="menu" class="overlay hidden">
   <div class="menu-bg"></div>
   <div class="menu-inner">
-    <div class="logo small">KR<span>U</span>NKER <em>CLONE</em></div>
+    <div class="menu-top">
+      <button id="btn-fullscreen" class="icon-btn" title="Vollbild (empfohlen: faengt Strg+W ab)">&#x26F6; VOLLBILD</button>
+    </div>
+    <div class="logo small">FRAG<span>STORM</span> <em>ARENA FPS</em></div>
 
     <div class="menu-tabs">
       <button class="tab active" data-tab="play">SPIELEN</button>
@@ -118,7 +126,7 @@
       <div class="play-grid">
         <div class="pcard">
           <label>SPIELERNAME</label>
-          <input id="opt-name" type="text" maxlength="16" value="Player" />
+          <input id="opt-name" type="text" maxlength="16" value="Player" autocomplete="off" spellcheck="false" />
           <label>SPIELMODUS</label>
           <select id="opt-mode">
             <option value="tdm">Team Deathmatch</option>
@@ -146,6 +154,7 @@
     </div>
 
     <div class="tabpane" id="pane-class">
+      <p id="class-hint" class="dim tip hidden" style="margin:0 0 12px">Die neue Klasse wird beim n&auml;chsten Spawn aktiv.</p>
       <div class="class-layout">
         <div id="class-grid"></div>
         <div id="class-detail"></div>
@@ -161,13 +170,13 @@
       <div class="ctrl-grid">
         <div><kbd>W A S D</kbd><span>Bewegen</span></div>
         <div><kbd>MAUS</kbd><span>Umsehen</span></div>
-        <div><kbd>LINKSKLICK</kbd><span>Schie&szlig;en</span></div>
+        <div><kbd>LINKSKLICK</kbd><span>Schie&szlig;en / Zuschlagen</span></div>
         <div><kbd>RECHTSKLICK</kbd><span>Zielen / Zoom</span></div>
-        <div><kbd>LEERTASTE</kbd><span>Springen (Doppelsprung je nach Klasse)</span></div>
+        <div><kbd>LEERTASTE</kbd><span>Springen &middot; halten = Bunny-Hop &middot; Doppelsprung je nach Klasse</span></div>
         <div><kbd>SHIFT</kbd><span>Sprinten</span></div>
-        <div><kbd>STRG / C</kbd><span>Ducken &middot; beim Sprint = Slide</span></div>
+        <div><kbd>C / STRG</kbd><span>Ducken &middot; beim Sprint = Slide</span></div>
         <div><kbd>R</kbd><span>Nachladen</span></div>
-        <div><kbd>1 2 3</kbd><span>Waffe wechseln</span></div>
+        <div><kbd>1 2 3</kbd><span>Waffe wechseln (auch Mausrad)</span></div>
         <div><kbd>Q</kbd><span>Letzte Waffe</span></div>
         <div><kbd>F</kbd><span>Nahkampf-Schlag</span></div>
         <div><kbd>G</kbd><span>Granate werfen</span></div>
@@ -176,8 +185,11 @@
         <div><kbd>V</kbd><span>Kamera: 1st / 3rd Person</span></div>
         <div><kbd>P</kbd><span>Performance-Anzeige</span></div>
       </div>
-      <p class="dim tip">Tipp: Springen + seitliches Strafen ohne Vorw&auml;rtstaste beschleunigt dich (Bunny-Hop / Air-Strafe) &mdash; genau wie im Original.</p>
+      <p class="dim tip">Tipp: Springen + seitliches Strafen ohne Vorw&auml;rtstaste beschleunigt dich (Bunny-Hop / Air-Strafe). Leertaste einfach gedr&uuml;ckt halten.<br />
+      Im Vollbild (Button oben rechts) f&auml;ngt das Spiel Browser-Tastenk&uuml;rzel wie Strg+W ab.</p>
     </div>
+
+    <button id="btn-back-game" class="small-btn hidden">&larr; ZUR&Uuml;CK ZUM SPIEL</button>
   </div>
 </div>
 
@@ -186,7 +198,9 @@
   <div class="pause-card">
     <h2>PAUSE</h2>
     <button id="btn-resume" class="big-btn">WEITERSPIELEN</button>
+    <button id="btn-class-ingame" class="small-btn">KLASSE WECHSELN</button>
     <button id="btn-settings-ingame" class="small-btn">EINSTELLUNGEN</button>
+    <button id="btn-fullscreen-pause" class="small-btn">VOLLBILD</button>
     <button id="btn-quit" class="small-btn danger">MATCH VERLASSEN</button>
   </div>
 </div>

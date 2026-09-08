@@ -1,11 +1,12 @@
 // ============================================================
-// Lokaler Spieler: Eingabe -> Intent, Kamera, Rueckstoss, Shake
+// Lokaler Spieler: Eingabe -> Intent, Kamera, Rueckstoss, Shake,
+// Treppen-Glaettung, Landungs-Dip, Todeskamera
 // ============================================================
 
 import * as THREE from 'three';
 import { Actor, PHYS } from './actor.js';
 import { settings } from '../core/settings.js';
-import { clamp, damp, lerp, rand, deg } from '../core/utils.js';
+import { clamp, damp, lerp, rand } from '../core/utils.js';
 
 const PITCH_LIMIT = Math.PI / 2 - 0.015;
 
@@ -24,17 +25,25 @@ export class LocalPlayer extends Actor {
     this.viewRoll = 0;
     this.camBobPhase = 0;
     this.camBob = new THREE.Vector3();
+    this.stepOffset = 0;        // Kamera-Glaettung bei Stufen
+    this.landDip = 0;           // Kamera-Einknicken bei Landung
 
     this.thirdPerson = false;
     this.adsToggleState = false;
     this.crouchToggleState = false;
+    this.sprintToggleState = false;
 
     this.lookDX = 0;
     this.lookDY = 0;
 
+    this.deathCamT = 0;
+    this.deathYaw = 0;
+    this.killer = null;
+
     this._v = new THREE.Vector3();
     this._v2 = new THREE.Vector3();
     this._camTarget = new THREE.Vector3();
+    this._look = new THREE.Vector3();
   }
 
   addRecoil(v, h) {
@@ -48,6 +57,21 @@ export class LocalPlayer extends Actor {
 
   addShake(amount) {
     this.shake = Math.min(1.6, this.shake + amount);
+  }
+
+  /** Hook aus der Physik: Stufe hoch (+) oder Snap runter (-) */
+  onStep(rise) {
+    this.stepOffset = clamp(this.stepOffset - rise, -1.3, 1.3);
+  }
+
+  onLanded(impact) {
+    if (impact > 6) this.landDip = Math.min(0.4, impact / 50);
+  }
+
+  onDeath(killer) {
+    this.deathCamT = 0;
+    this.deathYaw = this.yaw;
+    this.killer = killer && killer !== this ? killer : null;
   }
 
   // --------------------------------------------------------
@@ -74,10 +98,9 @@ export class LocalPlayer extends Actor {
     this.lookDX = damp(this.lookDX, dx / Math.max(dt, 0.001) * 0.001, 20, dt);
     this.lookDY = damp(this.lookDY, dy / Math.max(dt, 0.001) * 0.001, 20, dt);
 
-    this.yaw -= dx * sens;
-    this.pitch -= dy * sens;
-
     if (this.alive) {
+      this.yaw -= dx * sens;
+      this.pitch -= dy * sens;
       // Manuelle Rueckstosskompensation anrechnen
       if (dy > 0) this.recoilAccP = Math.max(0, this.recoilAccP - dy * sens);
       if (dx * this.recoilAccY < 0) {
@@ -90,7 +113,7 @@ export class LocalPlayer extends Actor {
     while (this.yaw < -Math.PI) this.yaw += Math.PI * 2;
 
     // ---------- Rueckstoss-Erholung ----------
-    if (this.game.time - this.lastFireTime > 0.11) {
+    if (this.alive && this.game.time - this.lastFireTime > 0.11) {
       const rate = (this.weapon.recoilRecover || 7) * dt;
       if (this.recoilAccP > 0) {
         const a = Math.min(this.recoilAccP, rate * 0.55);
@@ -106,27 +129,40 @@ export class LocalPlayer extends Actor {
 
     if (!this.alive) {
       it.fwd = it.side = 0;
-      it.fire = it.jump = it.crouch = it.sprint = false;
+      it.fire = it.jump = it.crouch = it.sprint = it.jumpPressed = false;
+      it.ads = false;
       return;
     }
 
     // ---------- Tastatur ----------
-    const f = (input.down('KeyW') ? 1 : 0) - (input.down('KeyS') ? 1 : 0);
-    const s = (input.down('KeyD') ? 1 : 0) - (input.down('KeyA') ? 1 : 0);
+    const f = (input.down('KeyW') || input.down('ArrowUp') ? 1 : 0) - (input.down('KeyS') || input.down('ArrowDown') ? 1 : 0);
+    const s = (input.down('KeyD') || input.down('ArrowRight') ? 1 : 0) - (input.down('KeyA') || input.down('ArrowLeft') ? 1 : 0);
     it.fwd = f;
     it.side = s;
 
     if (input.justDown('Space')) it.jumpPressed = true;
     it.jump = input.down('Space');
-    it.sprint = input.down('ShiftLeft') || input.down('ShiftRight');
+    it.autoJump = !!settings.autoJump;
 
-    // Ducken (Halten oder Umschalten)
-    const crouchKey = input.down('ControlLeft') || input.down('KeyC');
+    // Sprint: halten / umschalten / immer
+    const shift = input.down('ShiftLeft') || input.down('ShiftRight');
+    if (settings.sprintMode === 'always') it.sprint = true;
+    else if (settings.sprintMode === 'toggle') {
+      if (input.justDown('ShiftLeft') || input.justDown('ShiftRight')) this.sprintToggleState = !this.sprintToggleState;
+      if (f <= 0) this.sprintToggleState = false;
+      it.sprint = this.sprintToggleState;
+    } else it.sprint = shift;
+
+    // Ducken: C immer, dazu die gewaehlte Zusatztaste
+    const extra = settings.crouchKey === 'alt' ? ['AltLeft', 'AltRight'] : ['ControlLeft', 'ControlRight'];
+    const crouchKey = input.down('KeyC') || input.down(extra[0]) || input.down(extra[1]);
+    const crouchJust = input.justDown('KeyC') || input.justDown(extra[0]) || input.justDown(extra[1]);
     if (settings.toggleCrouch) {
-      if (input.justDown('ControlLeft') || input.justDown('KeyC')) this.crouchToggleState = !this.crouchToggleState;
+      if (crouchJust) this.crouchToggleState = !this.crouchToggleState;
       it.crouch = this.crouchToggleState;
     } else {
       it.crouch = crouchKey;
+      this.crouchToggleState = false;
     }
 
     // Zielen
@@ -137,7 +173,7 @@ export class LocalPlayer extends Actor {
       it.ads = input.mouseDown(2);
       this.adsToggleState = false;
     }
-    if (this.weapon.melee) it.ads = false;
+    if (this.weapon.melee) { it.ads = false; this.adsToggleState = false; }
 
     it.fire = input.mouseDown(0);
     if (input.justDown('KeyR')) it.reload = true;
@@ -175,23 +211,30 @@ export class LocalPlayer extends Actor {
       this.shakeOffset.set(0, 0, 0);
     }
 
+    // Treppen-Glaettung und Landungs-Dip
+    this.stepOffset = damp(this.stepOffset, 0, 16, dt);
+    if (Math.abs(this.stepOffset) < 0.002) this.stepOffset = 0;
+    this.landDip = damp(this.landDip, 0, 9, dt);
+
     // Kamerawackeln
     const hs = Math.hypot(this.vel.x, this.vel.z);
     const bobScale = settings.viewBob * (1 - this.adsAmount * 0.75);
-    if (this.grounded && hs > 1) this.camBobPhase += dt * hs * 1.15;
-    const amp = clamp(hs / 11, 0, 1.1) * 0.035 * bobScale * (this.grounded ? 1 : 0);
+    if (this.grounded && hs > 1 && !this.sliding) this.camBobPhase += dt * hs * 1.1;
+    const amp = clamp(hs / 11, 0, 1.1) * 0.03 * bobScale * (this.grounded && !this.sliding ? 1 : 0);
     this.camBob.x = damp(this.camBob.x, Math.cos(this.camBobPhase) * amp, 12, dt);
     this.camBob.y = damp(this.camBob.y, -Math.abs(Math.sin(this.camBobPhase)) * amp * 1.2, 12, dt);
 
-    // Seitliche Neigung beim Strafen
-    const strafeTilt = -this.intent.side * 0.022 * (this.grounded ? 1 : 0.6);
-    const slideTilt = this.sliding ? 0.075 : 0;
+    // Seitliche Neigung beim Strafen / Slide
+    const strafeTilt = -this.intent.side * 0.02 * (this.grounded ? 1 : 0.6);
+    const slideTilt = this.sliding ? 0.07 : 0;
     this.viewRoll = damp(this.viewRoll, strafeTilt + slideTilt, 9, dt);
   }
 
   // --------------------------------------------------------
   applyCamera(camera, world, dt) {
-    const eyeY = this.pos.y + this.eyeHeight();
+    if (!this.alive) { this._deathCamera(camera, world, dt); return; }
+
+    const eyeY = this.pos.y + this.eyeHeight() + this.stepOffset - this.landDip * 0.6;
     this._camTarget.set(this.pos.x, eyeY, this.pos.z);
     this._camTarget.y += this.camBob.y;
 
@@ -202,7 +245,7 @@ export class LocalPlayer extends Actor {
 
     camera.rotation.order = 'YXZ';
     camera.rotation.y = this.yaw;
-    camera.rotation.x = this.pitch;
+    camera.rotation.x = this.pitch - this.landDip * 0.25;
     camera.rotation.z = this.viewRoll;
 
     if (this.thirdPerson || settings.thirdPerson) {
@@ -230,6 +273,33 @@ export class LocalPlayer extends Actor {
     camera.position.add(this.shakeOffset);
   }
 
+  /** Orbit-Kamera um die eigene Leiche, Blick auf den Killer */
+  _deathCamera(camera, world, dt) {
+    this.deathCamT += dt;
+    const ang = this.deathYaw + this.deathCamT * 0.3;
+    const cx = this.pos.x, cy = this.pos.y + 1.0, cz = this.pos.z;
+    const dist = 5.2;
+    const ox = Math.sin(ang) * dist, oz = Math.cos(ang) * dist, oy = 2.4;
+    const l = Math.hypot(ox, oy, oz);
+    let d = l;
+    const hit = world.raycast(cx, cy, cz, ox / l, oy / l, oz / l, l + 0.3);
+    if (hit) d = Math.max(0.8, hit.t - 0.35);
+    camera.position.set(cx + ox / l * d, cy + oy / l * d, cz + oz / l * d);
+
+    const k = this.killer;
+    if (k && k.alive) {
+      this._look.set(k.pos.x, k.pos.y + 1.6, k.pos.z);
+      // Mischung: erst Leiche, dann langsam zum Killer schwenken
+      const t = clamp(this.deathCamT / 1.2, 0, 1);
+      this._look.lerp(this._v2.set(cx, cy, cz), 1 - t);
+    } else {
+      this._look.set(cx, cy, cz);
+    }
+    camera.rotation.order = 'YXZ';
+    camera.lookAt(this._look);
+    camera.rotation.z = 0;
+  }
+
   /** Sicht-FOV inkl. ADS und Sprint-Bonus */
   targetFov() {
     const base = settings.fov;
@@ -240,6 +310,7 @@ export class LocalPlayer extends Actor {
     const maxS = PHYS.BASE_SPEED * this.speedMult * PHYS.SPRINT_MULT;
     const over = clamp((hs - PHYS.BASE_SPEED * 0.9) / Math.max(1, maxS), 0, 1.4);
     fov += over * 9 * (1 - this.adsAmount);
+    if (this.sliding) fov += 4 * (1 - this.adsAmount);
     return fov;
   }
 }
