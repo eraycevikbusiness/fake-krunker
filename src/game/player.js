@@ -173,7 +173,8 @@ export class LocalPlayer extends Actor {
       it.ads = input.mouseDown(2);
       this.adsToggleState = false;
     }
-    if (this.weapon.melee) { it.ads = false; this.adsToggleState = false; }
+    // Nahkampfwaffen: Rechtsklick ist der schwere Angriff (kein Umschalten)
+    if (this.weapon.melee) { it.ads = input.mouseDown(2); this.adsToggleState = false; }
 
     it.fire = input.mouseDown(0);
     if (input.justDown('KeyR')) it.reload = true;

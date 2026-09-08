@@ -501,7 +501,11 @@ export class Bot extends Actor {
       return;
     }
     if (w.melee) {
-      if (dist < (w.meleeRange || 3.4) * 0.9 && angErr < 0.5) it.fire = true;
+      if (dist < (w.meleeRange || 3.4) * 0.9 && angErr < 0.5) {
+        // Gute Bots setzen auch den schweren Angriff ein
+        if (w.heavy && this.fireTimer <= 0 && Math.random() < 0.25 * d.strafeSkill) it.ads = true;
+        else it.fire = true;
+      }
       // Nach dem Nahkampf zurueck zur Primaerwaffe
       if (dist > 8 && Math.random() < 0.05) it.switchTo = 0;
       return;

@@ -121,6 +121,46 @@ const SWINGS = {
   },
 };
 
+// Schwere Angriffe (Rechtsklick)
+SWINGS.stab = {      // Messer: Stich nach vorn, Spitze zur Bildmitte
+  px: [[0, 0], [0.3, 0.10], [0.55, -0.24], [0.72, -0.20], [1, 0]],
+  py: [[0, 0], [0.3, -0.06], [0.55, 0.03], [1, 0]],
+  pz: [[0, 0], [0.3, 0.24], [0.55, -0.58], [0.72, -0.50], [1, 0]],
+  rx: [[0, 0], [0.3, -0.25], [0.55, 0.12], [1, 0]],
+  ry: [[0, 0], [0.3, -0.35], [0.55, 0.60], [0.72, 0.55], [1, 0]],
+  rz: [[0, 0], [0.3, 0.45], [0.55, -0.15], [1, 0]],
+};
+SWINGS.overhead = {  // Katana: hoch ausholen, mit Wucht herunterschlagen
+  px: [[0, 0], [0.35, 0.14], [0.58, -0.12], [1, 0]],
+  py: [[0, 0], [0.35, 0.34], [0.58, -0.30], [0.75, -0.24], [1, 0]],
+  pz: [[0, 0], [0.35, 0.16], [0.58, -0.42], [0.75, -0.36], [1, 0]],
+  rx: [[0, 0], [0.35, 1.30], [0.58, -0.90], [0.75, -0.70], [1, 0]],
+  ry: [[0, 0], [0.35, 0.25], [0.58, 0.30], [1, 0]],
+  rz: [[0, 0], [0.35, -0.35], [0.58, 0.25], [1, 0]],
+};
+
+// Zueck-Animationen (t: 0 -> 1)
+const EQUIP = {
+  raise: {
+    px: [[0, 0.04], [1, 0]], py: [[0, -0.42], [1, 0]], pz: [[0, 0.06], [1, 0]],
+    rx: [[0, 0.95], [1, 0]], ry: [[0, -0.30], [1, 0]], rz: [[0, 0.35], [1, 0]],
+  },
+  // Messer kommt von unten und ueberschlaegt sich sichtbar in der Hand (Valorant-Stil)
+  flip: {
+    px: [[0, -0.06], [0.5, -0.08], [1, 0]], py: [[0, -0.08], [0.45, 0.08], [1, 0]], pz: [[0, -0.08], [0.5, -0.12], [1, 0]],
+    rx: [[0, -0.15], [0.7, 0.10], [1, 0]], ry: [[0, 0.25], [1, 0]], rz: [[0, 0.35], [0.7, -0.08], [1, 0]],
+    spin: [[0, -6.28], [0.72, -0.10], [1, 0]],
+  },
+  // Katana wird von der Huefte gezogen: Klinge liegt erst quer im unteren Bild,
+  // schwingt dann mit Schwung nach oben in die Kampfstellung
+  unsheathe: {
+    px: [[0, -0.08], [0.5, 0.0], [1, 0]], py: [[0, -0.26], [0.5, -0.20], [1, 0]], pz: [[0, 0.0], [1, 0]],
+    rx: [[0, -0.15], [0.5, -0.05], [0.85, 0.14], [1, 0]],
+    ry: [[0, -1.15], [0.5, -0.90], [0.82, 0.26], [1, 0]],
+    rz: [[0, 0.45], [0.55, 0.30], [1, 0]],
+  },
+};
+
 const RELOAD = {
   rx: [[0, 0], [0.15, 0.45], [0.75, 0.50], [0.9, -0.08], [1, 0]],
   ry: [[0, 0], [0.15, -0.25], [0.75, -0.20], [1, 0]],
@@ -181,6 +221,8 @@ export class ViewModel {
     this.swingDur = 0.34;
     this.swingKind = 'bash';
     this.swingSide = 0;
+    this.equipKind = 'raise';
+    this.meshSpin = 0;
     this.hidden = false;
 
     this._basePos = new THREE.Vector3();
@@ -238,8 +280,9 @@ export class ViewModel {
     this._baseRot.set(vr[0], vr[1], vr[2]);
 
     // Visier auf Bildmitte: x = 0, y = -Visierhoehe * Massstab
-    const sy = SIGHT_Y[weapon.id] !== undefined ? SIGHT_Y[weapon.id] : 0.11;
+    const sy = weapon.sightY !== undefined ? weapon.sightY : (SIGHT_Y[weapon.id] !== undefined ? SIGHT_Y[weapon.id] : 0.11);
     this._adsPos.set(0, -sy * VM_SCALE, ADS_Z);
+    this.equipKind = weapon.equip || 'raise';
 
     // Das Muendungsfeuer haengt am ungescalten Knoten -> Position mitskalieren
     const mz = weapon.muzzle || [0, 0, -1];
@@ -273,19 +316,27 @@ export class ViewModel {
   }
 
   /** Nahkampf-Animation der aktuellen Waffe (oder Kolbenschlag / Wurf) */
-  melee(kind) {
+  melee(kind, dur) {
     const w = this.weapon;
     let k = kind;
     if (!k) {
       if (w && w.swing === 'sweep') k = this.swingSide ? 'sweep2' : 'sweep';
       else if (w && w.swing === 'slash') k = this.swingSide ? 'slash2' : 'slash';
       else k = 'bash';
+      this.swingSide ^= 1;
     }
-    this.swingSide ^= 1;
-    this.swingKind = k;
-    this.swingDur = (w && w.melee && w.swingTime) ? w.swingTime : 0.34;
+    this.swingKind = SWINGS[k] ? k : 'bash';
+    this.swingDur = dur || ((w && w.melee && w.swingTime) ? w.swingTime : 0.34);
     if (k === 'throw') this.swingDur = 0.45;
     this.swingT = this.swingDur;
+    this.switchT = 0;          // Zueck-Animation abbrechen
+  }
+
+  /** Rueckschlag beim Nahkampf-Treffer */
+  hitKick(heavy) {
+    this.recoilPos = Math.min(0.3, this.recoilPos + (heavy ? 0.14 : 0.08));
+    this.recoilRot = Math.max(-0.5, this.recoilRot - (heavy ? 0.22 : 0.10));
+    this.recoilRoll += rand(-0.14, 0.14);
   }
 
   _showFlash(scale) {
@@ -345,11 +396,16 @@ export class ViewModel {
     const sprinting = s.sprint && s.moveSpeed > 4 && s.grounded && !s.firing && this.ads < 0.05 && this.swingT <= 0;
     this.sprintT = damp(this.sprintT, sprinting ? 1 : 0, 11, dt);
 
-    // ---- Sway ----
-    this.swayTarget.x = clamp(-(s.lookDX || 0) * 0.012, -0.05, 0.05);
-    this.swayTarget.y = clamp((s.lookDY || 0) * 0.012, -0.05, 0.05);
-    this.sway.x = damp(this.sway.x, this.swayTarget.x, 10, dt);
-    this.sway.y = damp(this.sway.y, this.swayTarget.y, 10, dt);
+    // ---- Sway (Nahkampfwaffen reagieren traeger und staerker auf die Maus) ----
+    const swayMul = w.melee ? 2.4 : 1;
+    const swayRate = w.melee ? 7 : 10;
+    this.swayTarget.x = clamp(-(s.lookDX || 0) * 0.012 * swayMul, -0.09, 0.09);
+    this.swayTarget.y = clamp((s.lookDY || 0) * 0.012 * swayMul, -0.09, 0.09);
+    this.sway.x = damp(this.sway.x, this.swayTarget.x, swayRate, dt);
+    this.sway.y = damp(this.sway.y, this.swayTarget.y, swayRate, dt);
+    // Vertikale Traegheit bei Sprung / Fall
+    const velY = clamp((s.velY || 0) * 0.005, -0.07, 0.07) * (w.melee ? 1.6 : 1);
+    this.velLag = damp(this.velLag || 0, velY, 9, dt);
 
     // ---- Bob ----
     const bobScale = settings.viewBob * lerp(1, 0.25, this.ads);
@@ -380,12 +436,13 @@ export class ViewModel {
     const adsK = w.melee ? 0 : this.ads;
     p.copy(this._basePos).lerp(this._adsPos, adsK);
     p.x += this.bob.x + this.sway.x;
-    p.y += this.bob.y + this.sway.y - this.landT * 0.09;
+    p.y += this.bob.y + this.sway.y - this.landT * 0.09 - this.velLag;
     p.z += this.recoilPos;
 
-    let rx = -this.recoilRot + this.sway.y * 1.4 + this.landT * 0.22;
+    let rx = -this.recoilRot + this.sway.y * 1.4 + this.landT * 0.22 + this.velLag * 1.5;
     let ry = -this.sway.x * 2.2;
-    let rz = this.recoilRoll + this.bob.x * 0.9;
+    let rz = this.recoilRoll + this.bob.x * 0.9 + (w.melee ? -this.sway.x * 1.6 : 0);
+    let meshSpin = 0;
 
     // Atmen (Idle)
     const breath = Math.sin(this.time * 1.7) * (1 - adsK * 0.8);
@@ -425,12 +482,13 @@ export class ViewModel {
       }
     }
 
-    // Waffenwechsel: von unten hochziehen
+    // Waffe zuecken: hochziehen / Messer-Flip / Katana ziehen
     if (this.switchT > 0) {
-      const t = this.switchT / this.switchDur;         // 1 -> 0
-      p.y -= t * 0.42;
-      rx += t * 0.95;
-      rz += t * 0.3;
+      const t = 1 - this.switchT / this.switchDur;     // 0 -> 1
+      const eq = EQUIP[this.equipKind] || EQUIP.raise;
+      p.x += curve(t, eq.px); p.y += curve(t, eq.py); p.z += curve(t, eq.pz);
+      rx += curve(t, eq.rx); ry += curve(t, eq.ry); rz += curve(t, eq.rz);
+      if (eq.spin) meshSpin = curve(t, eq.spin);
     }
 
     // Nahkampfschlag / Wurf
@@ -444,9 +502,9 @@ export class ViewModel {
     this.root.position.copy(p);
     this.root.rotation.set(rx, ry, rz);
 
-    // Haltungsrotation der Waffe (beim Zielen gerade)
+    // Haltungsrotation der Waffe (beim Zielen gerade); Flip dreht die Klinge um die Griffachse
     const br = this._baseRot;
-    this.mesh.rotation.set(br.x * (1 - adsK), br.y * (1 - adsK), br.z * (1 - adsK));
+    this.mesh.rotation.set(br.x * (1 - adsK) + meshSpin, br.y * (1 - adsK), br.z * (1 - adsK));
 
     // ---- Arme per Mini-IK ----
     this.root.updateMatrixWorld(true);

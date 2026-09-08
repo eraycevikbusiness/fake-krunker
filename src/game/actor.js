@@ -131,6 +131,7 @@ export class Actor {
     this.burstTimer = 0;
     this.spread = 0;
     this.triggerHeld = false;
+    this.altHeld = false;
     this.ads = false;
     this.adsAmount = 0;
     this.nadeCooldown = 0;
@@ -203,6 +204,7 @@ export class Actor {
     this.ads = false;
     this.adsAmount = 0;
     this.triggerHeld = false;
+    this.altHeld = false;
     this.nadeCooldown = 0;
     this.slot = 0;
     this.lastSlot = 1;
@@ -580,6 +582,16 @@ export class Actor {
         this.nadeCooldown = 0.85;
         this.game.throwGrenade(this);
       }
+    }
+
+    // Schwerer Nahkampfangriff mit Rechtsklick (Messer: Stich, Katana: Ueberkopfhieb)
+    if (w.melee && w.heavy) {
+      if (it.ads && !this.altHeld && this.fireTimer <= 0 && this.switchTimer <= 0) {
+        this.fireTimer = w.heavy.swingTime;
+        this.triggerHeld = true;
+        this.game.fireWeapon(this, true);
+      }
+      this.altHeld = it.ads;
     }
 
     // Nahkampf-Schlag mit F (unabhaengig von der Waffe)

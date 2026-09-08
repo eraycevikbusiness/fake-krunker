@@ -265,6 +265,9 @@ export class CharacterModel {
     this.recoilT = 0;
     this.swingT = 0;
     this.swingDur = 0.35;
+    this.swingKind = null;
+    this.drawT = 0;
+    this.drawDur = 0.4;
     this.crouchT = 0;
     this.deathT = 0;
     this.deathDir = 0;
@@ -284,6 +287,7 @@ export class CharacterModel {
     const g = (weapon.grips && weapon.grips.r) || [0, 0, 0];
     this.weaponMesh.position.set(-g[0] * 0.9, -g[1] * 0.9, -g[2] * 0.9);
     this.weaponHolder.add(this.weaponMesh);
+    this.triggerDraw(weapon.switchTime || 0.4);
   }
 
   /** Weltposition der Muendung */
@@ -307,10 +311,18 @@ export class CharacterModel {
 
   triggerRecoil(amount) { this.recoilT = Math.min(1, this.recoilT + (amount || 0.6)); }
 
-  /** Nahkampfschlag (Messer/Katana/Kolben) */
-  triggerSwing(dur) {
+  /** Nahkampfschlag (Messer/Katana/Kolben); kind = slash | sweep | stab | overhead | bash */
+  triggerSwing(dur, kind) {
     this.swingDur = dur || 0.35;
     this.swingT = this.swingDur;
+    this.swingKind = kind || null;
+    this.drawT = 0;
+  }
+
+  /** Waffe zuecken: kommt von unten hoch */
+  triggerDraw(dur) {
+    this.drawDur = Math.max(0.15, dur || 0.4);
+    this.drawT = this.drawDur;
   }
 
   startDeath(dirX, dirZ) {
@@ -417,10 +429,31 @@ export class CharacterModel {
     hz += this.recoilT * 0.12;
     rx += this.recoilT * 0.22;
 
+    // Zuecken: Waffe kommt von unten hoch
+    if (this.drawT > 0) {
+      this.drawT = Math.max(0, this.drawT - dt);
+      const k = this.drawT / this.drawDur;
+      hy -= k * 0.5;
+      rx += k * 1.1;
+      ry -= k * 0.4;
+    }
+
     // Nahkampfschlag
     if (this.swingT > 0) {
       const sc = swingCurve(1 - this.swingT / this.swingDur);
-      if (hold === 'katana') {
+      const sk = this.swingKind;
+      if (sk === 'stab') {
+        // Stich: zuruecknehmen, dann nach vorn stossen
+        hz -= sc * 0.5;
+        hx -= Math.max(0, sc) * 0.25;
+        ry += Math.max(0, sc) * 0.5;
+        rx -= sc * 0.25;
+      } else if (sk === 'overhead') {
+        // Ueberkopfhieb: hoch ausholen, herunterschlagen
+        rx += -sc * 1.4;
+        hy += Math.min(0, sc) * -0.35 - Math.max(0, sc) * 0.25;
+        hz -= Math.max(0, sc) * 0.35;
+      } else if (hold === 'katana') {
         ry += sc * 1.25;
         rx -= Math.max(0, sc) * 0.55;
         rz += sc * 0.35;

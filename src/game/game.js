@@ -419,7 +419,7 @@ export class Game {
       this.hud.hideDeath();
       this.viewmodel.setWeapon(actor.weapon, actor.skin);
       this.viewmodel.setHidden(false);
-      if (!initial) audio.tone(540, 0.09, 0.2, 'sine');
+      if (!initial) { audio.tone(540, 0.09, 0.2, 'sine'); audio.draw(null, actor.weapon.hold); }
     }
   }
 
@@ -447,7 +447,7 @@ export class Game {
     return out;
   }
 
-  fireWeapon(actor) {
+  fireWeapon(actor, heavy) {
     const w = actor.weapon;
     actor.lastLoudTime = this.time;
 
@@ -460,12 +460,18 @@ export class Game {
     // Audio
     const soundPos = actor.isLocal ? null : { x: actor.pos.x, y: actor.pos.y + 1.6, z: actor.pos.z };
     if (w.melee) {
-      audio.swing(soundPos);
-      // Treffer landet passend zur Schwunganimation etwas verzoegert
-      const delay = (w.swingTime || 0.32) * 0.3;
-      this.pendingMelee.push({ actor, w, t: delay });
-      if (actor.isLocal) this.viewmodel.melee();
-      if (actor.model) actor.model.triggerSwing(w.swingTime || 0.32);
+      const h = heavy && w.heavy ? w.heavy : null;
+      const def = h ? Object.assign({ id: w.id, headMult: w.headMult, knockback: w.knockback }, h) : w;
+      const swingTime = def.swingTime || 0.32;
+      audio.swing(soundPos, w.hold, !!h);
+      // Treffer landet passend zur Schwunganimation verzoegert
+      const delay = swingTime * (h ? (h.hitAt || 0.45) : 0.3);
+      this.pendingMelee.push({ actor, w: def, t: delay, kind: w.hold, heavy: !!h });
+      // Ausfallschritt zum Gegner, wenn einer in Reichweite steht
+      const lunge = h ? h.lunge : w.lunge;
+      if (lunge) this._meleeLunge(actor, (def.meleeRange || 3.4) * 1.8, lunge);
+      if (actor.isLocal) this.viewmodel.melee(h ? h.swing : null, swingTime);
+      if (actor.model) actor.model.triggerSwing(swingTime, h ? h.swing : w.swing);
       return;
     }
 
@@ -652,7 +658,31 @@ export class Game {
   // --------------------------------------------------------
   // Nahkampf
   // --------------------------------------------------------
-  meleeAttack(actor, w) {
+  /** Kurzer Vorstoss Richtung naechstem Gegner im Blickkegel */
+  _meleeLunge(actor, range, power) {
+    let best = null, bestD = Infinity;
+    const fx = -Math.sin(actor.yaw), fz = -Math.cos(actor.yaw);
+    for (const a of this.actors) {
+      if (a === actor || !a.alive || this.sameTeam(a, actor)) continue;
+      const dx = a.pos.x - actor.pos.x, dz = a.pos.z - actor.pos.z;
+      const d = Math.hypot(dx, dz);
+      if (d > range || d < 0.3) continue;
+      if ((dx * fx + dz * fz) / d < 0.6) continue;
+      if (Math.abs(a.pos.y - actor.pos.y) > 3) continue;
+      if (d < bestD) { bestD = d; best = a; }
+    }
+    if (!best) return;
+    const dx = best.pos.x - actor.pos.x, dz = best.pos.z - actor.pos.z;
+    const d = Math.max(0.3, Math.hypot(dx, dz));
+    // Nicht ueber das Ziel hinausschiessen
+    const push = Math.min(power, Math.max(0, d - 1.6) * 4);
+    if (push <= 0) return;
+    actor.vel.x += (dx / d) * push;
+    actor.vel.z += (dz / d) * push;
+    if (actor.grounded) { actor.vel.y = Math.max(actor.vel.y, 1.2); actor.grounded = false; actor.coyote = 0; }
+  }
+
+  meleeAttack(actor, w, kind, heavy) {
     if (!actor.alive) return;
     const range = w.meleeRange || 3.4;
     const eye = actor.eyePos(this._v1);
@@ -707,25 +737,37 @@ export class Game {
         x: hx.x, y: hx.y, z: hx.z,
         dirx: dir.x, diry: dir.y, dirz: dir.z, head,
       });
+      // Wucht: Opfer wird weggestossen
+      const kb = (w.knockback || 4) * (heavy ? 1.6 : 1);
+      if (hit.alive) {
+        hit.vel.x += dir.x * kb;
+        hit.vel.z += dir.z * kb;
+        hit.vel.y += kb * 0.35;
+        hit.grounded = false;
+        hit.coyote = 0;
+      }
       if (this.effects) {
         this.effects.blood(hx.x, hx.y, hx.z, dir.x, dir.y, dir.z, true);
+        if (heavy) this.effects.blood(hx.x, hx.y, hx.z, dir.x, dir.y + 0.4, dir.z, true);
       }
-      audio.flesh({ x: hx.x, y: hx.y, z: hx.z });
+      audio.meleeHit(actor.isLocal ? null : { x: hx.x, y: hx.y, z: hx.z }, kind, heavy);
       if (actor.isLocal) {
         this.hud.hitmarker(res && res.killed ? 'kill' : (back || head) ? 'head' : 'hit');
         audio.hitmarker(back || head);
+        actor.addShake(heavy ? 0.5 : 0.25);
+        this.viewmodel.hitKick(heavy);
       }
     }
   }
 
   /** Schneller Nahkampfschlag mit F, ohne Waffenwechsel */
   quickMelee(actor) {
-    audio.swing(actor.isLocal ? null : { x: actor.pos.x, y: actor.pos.y + 1.5, z: actor.pos.z });
-    if (actor.isLocal) this.viewmodel.melee('bash');
-    if (actor.model) actor.model.triggerSwing(0.34);
+    audio.swing(actor.isLocal ? null : { x: actor.pos.x, y: actor.pos.y + 1.5, z: actor.pos.z }, 'bash', false);
+    if (actor.isLocal) this.viewmodel.melee('bash', 0.34);
+    if (actor.model) actor.model.triggerSwing(0.34, 'bash');
     this.pendingMelee.push({
-      actor, t: 0.1,
-      w: { damage: 45, meleeRange: 3.2, meleeArc: 0.5, meleeBackstab: 2, headMult: 1, id: 'melee' },
+      actor, t: 0.1, kind: 'bash', heavy: false,
+      w: { damage: 45, meleeRange: 3.2, meleeArc: 0.5, meleeBackstab: 2, headMult: 1, id: 'melee', knockback: 3 },
     });
   }
 
@@ -735,7 +777,7 @@ export class Game {
       m.t -= dt;
       if (m.t <= 0) {
         this.pendingMelee.splice(i, 1);
-        if (m.actor.alive) this.meleeAttack(m.actor, m.w);
+        if (m.actor.alive) this.meleeAttack(m.actor, m.w, m.kind, m.heavy);
       }
     }
   }
@@ -1185,7 +1227,7 @@ export class Game {
   onWeaponSwitch(a) {
     if (a.isLocal) { this.viewmodel.setWeapon(a.weapon, a.skin); this.viewmodel.setHidden(false); }
     if (a.model) a.model.setWeapon(a.weapon);
-    audio.click(a.isLocal ? null : { x: a.pos.x, y: a.pos.y + 1.4, z: a.pos.z }, 1100, 0.22, 0.05);
+    audio.draw(a.isLocal ? null : { x: a.pos.x, y: a.pos.y + 1.4, z: a.pos.z }, a.weapon.hold);
     if (a.isBot) a._updatePreferredRange();
   }
 
@@ -1274,6 +1316,7 @@ export class Game {
         firing: p.intent.fire,
         lookDX: p.lookDX,
         lookDY: p.lookDY,
+        velY: p.vel.y,
         landImpact: p.landImpact > 0.35 ? p.landImpact * 0.4 : 0,
       });
     }

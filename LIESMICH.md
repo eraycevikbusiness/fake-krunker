@@ -41,8 +41,8 @@ Spiel Browser-Kürzel wie `Strg+W` ab (Keyboard-Lock-API in Chrome/Edge).
 |---|---|
 | `W A S D` | Bewegen |
 | Maus | Umsehen |
-| Linksklick | Schießen / Zuschlagen |
-| Rechtsklick | Zielen / Zoom (Scharfschützengewehr: Zielfernrohr) |
+| Linksklick | Schießen / schneller Nahkampfschlag |
+| Rechtsklick | Zielen / Zoom (Scharfschützengewehr: Zielfernrohr) — mit Messer: **Stich** (100 Schaden), mit Katana: **Überkopfhieb** (150 Schaden) |
 | `Leertaste` | Springen — **gedrückt halten = automatischer Bunny-Hop**; Doppel-/Dreifachsprung je nach Klasse |
 | `Shift` | Sprinten (halten, umschalten oder „immer rennen“ — einstellbar) |
 | `C` / `Strg` | Ducken — im Sprint wird daraus ein Slide |
@@ -130,6 +130,23 @@ die Waffe, wenn die Munition leer ist.
 * Partikel laden nur den benutzten Pufferbereich hoch, das HUD schreibt nur
   geänderte Werte ins DOM
 * Schatten: Niedrig/Hoch nutzen das günstigere PCF, Ultra weiches PCF
+
+## Nahkampf
+
+Messer und Katana haben eigene Zück-Animationen (Messer-Flip, Katana wird von
+der Hüfte gezogen), leichte Schläge mit wechselnder Richtung (Linksklick) und
+einen schweren Angriff (Rechtsklick). Bei einem Gegner in Reichweite macht der
+Angreifer einen kurzen Ausfallschritt, Treffer stoßen das Opfer zurück und
+kicken die Kamera. Nahkampfwaffen reagieren träger und stärker auf Mausbewegung
+und Sprünge.
+
+## Sound
+
+Alle Geräusche werden synthetisiert: Schüsse aus Transient, Crack, Body,
+Verschluss-Klick (Repetierwaffen mit zweitem Klick) und Nachhall über einen
+Hall-Bus, der mit der Entfernung lauter wird. Jede Waffe hat ein eigenes
+Zück-Geräusch (Ladegriff, Schlitten, Messer-„Shing“, Katana-Ziehen mit
+Klingenresonanz), Nachladen in drei Schritten, Nahkampf-Schwünge und -Treffer.
 
 ## Weitere Funktionen
 

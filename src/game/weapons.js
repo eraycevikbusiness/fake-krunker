@@ -1,167 +1,374 @@
 // ============================================================
 // Waffen- und Klassendefinitionen
-// Modelle werden aus Boxen zusammengesetzt (parts).
+// Modelle werden aus Boxen zusammengesetzt (parts) und zu EINEM Mesh
+// verschmolzen - viele kleine Teile kosten also keine Draw-Calls.
 // Lokales Koordinatensystem: -Z = Laufrichtung, +Y = oben, +X = rechts
 //
-// Neu: jede Waffe hat
+// Jede Waffe hat
 //   hold   - Haltungstyp (rifle | pistol | akimbo | launcher | knife | katana | nade)
-//   grips  - Griffpunkte fuer rechte/linke Hand im Waffenraum (Arme werden
-//            per Mini-IK von der Schulter dorthin gezogen)
-//   vmPos / vmRot - Ablage in der Egoansicht (optional)
-//   swing  - Nahkampf-Animation (slash | sweep)
+//   grips  - Griffpunkte fuer rechte/linke Hand im Waffenraum
+//   vmPos / vmRot - Ablage in der Egoansicht (optional), sightY = Visierhoehe
+//   equip  - Zueck-Animation (raise | flip | unsheathe)
+//   swing / heavy - Nahkampf: leichter Schlag (Linksklick) und schwerer
+//            Angriff (Rechtsklick, mehr Schaden, langsamer)
+//   sound  - Parameter fuer die synthetisierten Schussgeraeusche
 // ============================================================
 
 const MAT = {
   body:   0x2c2f36,
   dark:   0x1b1d22,
+  black:  0x101216,
   metal:  0x555b66,
   steel:  0x8a929e,
-  edge:   0xd6dde6,
+  steelDark: 0x5f6773,
+  chrome: 0xb4bcc8,
+  edge:   0xe6ecf4,
   wood:   0x6b4a2c,
+  wood2:  0x54371f,
   grip:   0x22242a,
+  rubber: 0x2a2d33,
   wrap:   0x3a2a4a,
+  wrap2:  0x1f1626,
+  brass:  0xc9a54a,
   accent: 0xffc21f,
+  red:    0xb03a3a,
   green:  0x3f5c3a,
   tan:    0x9a8461,
-  red:    0xb03a3a,
   glow:   0x2ee6ff,
+  glowR:  0xff3b3b,
 };
 
 const p = (x, y, z, w, h, d, color, rot) => ({ x, y, z, w, h, d, color, rot });
+
+// Gemeinsame Kleinteile
+const triggerGuard = (z, color = MAT.dark) => [
+  p(0, -0.115, z, 0.05, 0.012, 0.14, color),
+  p(0, -0.14, z - 0.075, 0.05, 0.06, 0.012, color),
+  p(0, -0.10, z + 0.01, 0.012, 0.045, 0.018, MAT.metal),      // Abzug
+];
+const rearSight = (y, z) => [
+  p(0, y, z, 0.05, 0.05, 0.06, MAT.dark),
+  p(-0.014, y + 0.03, z, 0.008, 0.02, 0.02, MAT.dark),
+  p(0.014, y + 0.03, z, 0.008, 0.02, 0.02, MAT.dark),
+];
+const frontSight = (y, z) => [
+  p(0, y, z, 0.03, 0.05, 0.05, MAT.dark),
+  p(0, y + 0.04, z, 0.01, 0.035, 0.015, MAT.dark),
+];
+
+// ------------------------------------------------------------
+// Katana-Klinge: leicht gebogen aus mehreren Segmenten
+// ------------------------------------------------------------
+function katanaParts() {
+  const parts = [];
+  // Griff (Tsuka) mit Wicklung, Menuki, Fuchi und Kashira
+  parts.push(p(0, -0.02, 0.20, 0.034, 0.05, 0.34, MAT.wrap));
+  for (let i = 0; i < 7; i++) parts.push(p(0, -0.02, 0.055 + i * 0.048, 0.04, 0.056, 0.012, MAT.wrap2));
+  parts.push(p(0.021, -0.02, 0.19, 0.006, 0.018, 0.05, MAT.brass));       // Menuki
+  parts.push(p(0, -0.02, 0.032, 0.042, 0.058, 0.022, MAT.brass));         // Fuchi
+  parts.push(p(0, -0.02, 0.378, 0.042, 0.058, 0.024, MAT.brass));         // Kashira
+  // Tsuba (achteckig) + Seppa
+  parts.push(p(0, 0, 0.012, 0.125, 0.125, 0.018, MAT.black));
+  parts.push(p(0, 0, 0.012, 0.125, 0.125, 0.018, MAT.black, { z: 0.785 }));
+  parts.push(p(0, 0, 0.012, 0.09, 0.09, 0.022, MAT.brass, { z: 0.39 }));
+  parts.push(p(0, 0, -0.004, 0.06, 0.07, 0.012, MAT.brass));
+  // Habaki
+  parts.push(p(0, 0.005, -0.03, 0.026, 0.07, 0.045, MAT.brass));
+  // Klinge: 5 Segmente, nach vorn zunehmend gebogen
+  const SEG = 5, L = 0.215, k = 0.11;
+  for (let i = 0; i < SEG; i++) {
+    const dist = (i + 0.5) * L;
+    const z = -0.055 - dist;
+    const y = 0.5 * k * dist * dist * 0.5;
+    const rx = k * dist * 0.5;
+    parts.push(p(0, y + 0.008, z, 0.016, 0.072, L + 0.01, MAT.steelDark, { x: rx }));  // Klingenkoerper
+    parts.push(p(0, y + 0.02, z, 0.018, 0.026, L + 0.01, MAT.steel, { x: rx }));       // Shinogi (Grat, heller)
+    parts.push(p(0, y - 0.03, z, 0.021, 0.016, L + 0.01, MAT.edge, { x: rx }));        // Hamon / Schneide
+    parts.push(p(0, y + 0.041, z, 0.011, 0.009, L + 0.01, MAT.black, { x: rx }));      // Ruecken
+  }
+  const dEnd = SEG * L;
+  const yEnd = 0.5 * k * dEnd * dEnd * 0.5, rEnd = k * dEnd * 0.5;
+  parts.push(p(0, yEnd + 0.014, -0.055 - dEnd - 0.06, 0.015, 0.058, 0.12, MAT.steelDark, { x: rEnd + 0.15 }));
+  parts.push(p(0, yEnd - 0.006, -0.055 - dEnd - 0.06, 0.02, 0.014, 0.12, MAT.edge, { x: rEnd + 0.15 }));
+  parts.push(p(0, yEnd + 0.034, -0.055 - dEnd - 0.135, 0.013, 0.028, 0.05, MAT.edge, { x: rEnd + 0.35 }));
+  return parts;
+}
 
 // ------------------------------------------------------------
 // Bauteil-Sets
 // ------------------------------------------------------------
 const PARTS = {
+  // M4-artiges Sturmgewehr: Receiver, Magazin, Handschutz mit Schienen,
+  // Muendungsbremse, Red-Dot, Ladegriff, Pufferrohr, Schulterstuetze
   ar: [
-    p(0, 0, -0.26, 0.11, 0.15, 0.9, MAT.body),
-    p(0, 0.02, -0.88, 0.085, 0.10, 0.46, MAT.dark),
-    p(0, 0.03, -1.16, 0.055, 0.055, 0.34, MAT.metal),
-    p(0, 0.03, -1.36, 0.075, 0.075, 0.12, MAT.dark),
-    p(0, -0.20, -0.20, 0.075, 0.30, 0.16, MAT.dark, { x: 0.12 }),
-    p(0, -0.17, 0.10, 0.075, 0.24, 0.11, MAT.grip, { x: -0.25 }),
-    p(0, 0.0, 0.36, 0.09, 0.13, 0.44, MAT.body),
-    p(0, 0.10, 0.34, 0.05, 0.06, 0.30, MAT.dark),
-    p(0, 0.115, -0.02, 0.045, 0.07, 0.09, MAT.dark),
-    p(0, 0.115, -1.02, 0.035, 0.075, 0.05, MAT.dark),
-    p(0.062, 0.02, -0.05, 0.03, 0.05, 0.14, MAT.metal),
+    p(0, 0.02, -0.22, 0.10, 0.12, 0.78, MAT.body),
+    p(0, -0.06, -0.05, 0.095, 0.09, 0.42, MAT.dark),
+    p(0.052, 0.03, -0.14, 0.006, 0.04, 0.12, MAT.metal),                  // Auswurffenster
+    p(0, -0.22, -0.16, 0.07, 0.30, 0.14, MAT.dark, { x: 0.15 }),           // Magazin
+    p(0, -0.37, -0.12, 0.075, 0.03, 0.15, MAT.metal, { x: 0.15 }),
+    p(0, 0.02, -0.82, 0.09, 0.10, 0.46, MAT.dark),                        // Handschutz
+    p(0, 0.085, -0.6, 0.05, 0.022, 0.9, MAT.metal),                       // Schiene oben
+    p(-0.052, 0.0, -0.82, 0.012, 0.03, 0.42, MAT.metal),
+    p(0.052, 0.0, -0.82, 0.012, 0.03, 0.42, MAT.metal),
+    p(0, 0.03, -1.18, 0.05, 0.05, 0.34, MAT.metal),                       // Lauf
+    p(0, 0.03, -1.39, 0.07, 0.07, 0.12, MAT.dark),                        // Muendungsbremse
+    p(0, 0.03, -1.39, 0.075, 0.02, 0.10, MAT.black),
+    ...frontSight(0.12, -1.02),
+    p(0, 0.125, -0.10, 0.05, 0.07, 0.15, MAT.dark),                       // Red-Dot Gehaeuse
+    p(0, 0.16, -0.10, 0.056, 0.012, 0.16, MAT.black),
+    p(0, 0.14, -0.18, 0.038, 0.04, 0.008, MAT.glowR),                     // Linse
+    ...rearSight(0.12, 0.10),
+    p(0, 0.06, 0.20, 0.06, 0.03, 0.06, MAT.metal),                        // Ladegriff
+    p(0, -0.17, 0.12, 0.07, 0.24, 0.10, MAT.grip, { x: -0.25 }),          // Pistolengriff
+    ...triggerGuard(0.0),
+    p(0, 0.02, 0.40, 0.06, 0.06, 0.36, MAT.metal),                        // Pufferrohr
+    p(0, 0.0, 0.52, 0.085, 0.13, 0.22, MAT.body),                         // Schulterstuetze
+    p(0, 0.0, 0.64, 0.09, 0.15, 0.03, MAT.rubber),
+    p(0, -0.14, -0.75, 0.05, 0.14, 0.06, MAT.grip),                       // Vordergriff
   ],
+  // MP5-artige Maschinenpistole mit Klappschaft
   smg: [
-    p(0, 0, -0.16, 0.10, 0.14, 0.62, MAT.body),
-    p(0, 0.02, -0.58, 0.06, 0.07, 0.36, MAT.dark),
-    p(0, 0.02, -0.80, 0.05, 0.05, 0.14, MAT.metal),
-    p(0, -0.22, -0.10, 0.06, 0.34, 0.10, MAT.dark),
+    p(0, 0.0, -0.18, 0.095, 0.13, 0.66, MAT.body),
+    p(0, 0.075, -0.2, 0.04, 0.02, 0.5, MAT.metal),
+    p(0.05, 0.03, -0.38, 0.03, 0.02, 0.05, MAT.metal),                    // Spannhebel
+    p(0, -0.02, -0.58, 0.085, 0.10, 0.34, MAT.dark),                      // Handschutz
+    p(0, 0.02, -0.82, 0.045, 0.045, 0.18, MAT.metal),
+    p(0, 0.02, -0.94, 0.055, 0.055, 0.06, MAT.dark),
+    p(0, -0.24, -0.20, 0.055, 0.36, 0.09, MAT.dark, { x: 0.1 }),           // Magazin (gebogen)
+    p(0, -0.42, -0.17, 0.06, 0.025, 0.10, MAT.metal, { x: 0.1 }),
     p(0, -0.15, 0.10, 0.07, 0.22, 0.10, MAT.grip, { x: -0.2 }),
-    p(0, 0.02, 0.26, 0.07, 0.09, 0.26, MAT.metal),
-    p(0, 0.10, -0.05, 0.04, 0.06, 0.06, MAT.dark),
-    p(0, 0.10, -0.70, 0.03, 0.06, 0.04, MAT.dark),
+    ...triggerGuard(-0.02),
+    p(-0.032, 0.02, 0.32, 0.02, 0.03, 0.30, MAT.metal),                   // Klappschaft
+    p(0.032, 0.02, 0.32, 0.02, 0.03, 0.30, MAT.metal),
+    p(0, 0.0, 0.48, 0.08, 0.11, 0.03, MAT.dark),
+    p(0, 0.115, 0.0, 0.05, 0.06, 0.06, MAT.dark),                         // Trommelvisier
+    p(0, 0.115, -0.72, 0.035, 0.07, 0.04, MAT.dark),
+    p(0, 0.16, -0.72, 0.012, 0.03, 0.012, MAT.dark),
   ],
+  // Repetiergewehr mit Zielfernrohr, Kammerstengel und Zweibein
   sniper: [
-    p(0, 0, -0.10, 0.10, 0.13, 1.0, MAT.wood),
-    p(0, 0.01, -0.92, 0.05, 0.05, 0.72, MAT.dark),
-    p(0, 0.01, -1.30, 0.065, 0.065, 0.10, MAT.metal),
-    p(0, 0.145, -0.28, 0.075, 0.085, 0.52, MAT.dark),
-    p(0, 0.145, -0.56, 0.09, 0.10, 0.06, MAT.metal),
-    p(0, 0.145, 0.0, 0.09, 0.10, 0.06, MAT.metal),
-    p(0, 0.075, -0.16, 0.04, 0.06, 0.06, MAT.metal),
-    p(0, 0.075, -0.42, 0.04, 0.06, 0.06, MAT.metal),
-    p(0, -0.16, -0.12, 0.06, 0.20, 0.12, MAT.dark),
+    p(0, -0.02, 0.42, 0.09, 0.17, 0.46, MAT.wood),                        // Schaft
+    p(0, 0.08, 0.38, 0.07, 0.04, 0.30, MAT.wood2),                        // Wangenauflage
+    p(0, -0.02, 0.66, 0.095, 0.18, 0.03, MAT.rubber),
+    p(0, 0.0, -0.05, 0.095, 0.13, 0.5, MAT.wood),
+    p(0, 0.05, -0.12, 0.07, 0.08, 0.44, MAT.dark),                        // System
+    p(0.07, 0.05, 0.0, 0.06, 0.025, 0.025, MAT.metal),                    // Kammerstengel
+    p(0.11, 0.03, 0.0, 0.032, 0.032, 0.032, MAT.metal),
+    p(0, 0.03, -0.95, 0.045, 0.045, 1.0, MAT.dark),                       // Lauf
+    p(0, 0.03, -1.48, 0.06, 0.06, 0.10, MAT.metal),
+    p(0, -0.03, -0.55, 0.09, 0.09, 0.5, MAT.wood),                        // Vorderschaft
+    p(0, 0.16, -0.28, 0.06, 0.06, 0.5, MAT.dark),                         // Zielfernrohr
+    p(0, 0.16, -0.58, 0.085, 0.085, 0.10, MAT.metal),
+    p(0, 0.16, 0.0, 0.075, 0.075, 0.08, MAT.metal),
+    p(0, 0.16, -0.635, 0.07, 0.07, 0.01, MAT.glow),
+    p(0, 0.11, -0.16, 0.045, 0.06, 0.04, MAT.metal),
+    p(0, 0.11, -0.42, 0.045, 0.06, 0.04, MAT.metal),
+    p(0, -0.12, -0.10, 0.06, 0.10, 0.14, MAT.dark),                       // Magazin
     p(0, -0.14, 0.16, 0.07, 0.22, 0.11, MAT.wood, { x: -0.22 }),
-    p(0, 0.0, 0.46, 0.09, 0.16, 0.42, MAT.wood),
-    p(0.06, 0.03, -0.02, 0.04, 0.05, 0.16, MAT.metal),
+    ...triggerGuard(0.0),
+    p(-0.05, -0.12, -0.85, 0.02, 0.22, 0.02, MAT.metal, { x: -1.3 }),     // Zweibein (eingeklappt)
+    p(0.05, -0.12, -0.85, 0.02, 0.22, 0.02, MAT.metal, { x: -1.3 }),
   ],
+  // Pump-Action-Schrotflinte mit Roehrenmagazin und Patronenhalter
   shotgun: [
-    p(0, 0, -0.20, 0.11, 0.14, 0.80, MAT.body),
-    p(0, 0.03, -0.82, 0.07, 0.07, 0.56, MAT.dark),
-    p(0, -0.05, -0.82, 0.09, 0.06, 0.50, MAT.wood),
-    p(0, 0.03, -1.14, 0.085, 0.085, 0.10, MAT.metal),
+    p(0, 0, -0.15, 0.10, 0.14, 0.5, MAT.body),
+    p(0, 0.04, -0.85, 0.055, 0.055, 0.8, MAT.dark),                       // Lauf
+    p(0, -0.04, -0.80, 0.05, 0.05, 0.7, MAT.metal),                       // Roehrenmagazin
+    p(0, 0.04, -1.27, 0.065, 0.065, 0.06, MAT.metal),
+    p(0, -0.03, -0.72, 0.09, 0.09, 0.24, MAT.wood),                       // Pumpgriff
+    p(0, -0.03, -0.66, 0.095, 0.095, 0.02, MAT.wood2),
+    p(0, -0.03, -0.78, 0.095, 0.095, 0.02, MAT.wood2),
+    p(0.062, 0.02, -0.02, 0.02, 0.04, 0.05, MAT.red),                     // Patronenhalter
+    p(0.062, 0.02, -0.10, 0.02, 0.04, 0.05, MAT.red),
+    p(0.062, 0.02, -0.18, 0.02, 0.04, 0.05, MAT.red),
+    p(0.062, 0.02, -0.26, 0.02, 0.04, 0.05, MAT.brass),
     p(0, -0.14, 0.12, 0.075, 0.22, 0.11, MAT.wood, { x: -0.24 }),
-    p(0, 0.0, 0.40, 0.09, 0.15, 0.40, MAT.wood),
-    p(0, 0.105, -0.05, 0.04, 0.05, 0.08, MAT.dark),
+    p(0, 0.0, 0.42, 0.09, 0.15, 0.42, MAT.wood),
+    p(0, 0.0, 0.64, 0.095, 0.16, 0.03, MAT.rubber),
+    ...triggerGuard(0.0),
+    p(0, 0.085, -1.22, 0.015, 0.02, 0.02, MAT.accent),                    // Korn
+    p(0, 0.09, -0.2, 0.04, 0.03, 0.06, MAT.dark),
   ],
+  // Leichtes MG mit Kastenmagazin, Tragegriff, Zweibein
   lmg: [
-    p(0, 0, -0.26, 0.13, 0.17, 1.0, MAT.green),
-    p(0, 0.02, -0.96, 0.07, 0.07, 0.6, MAT.dark),
-    p(0, 0.02, -1.30, 0.09, 0.09, 0.14, MAT.metal),
-    p(0, -0.20, -0.30, 0.20, 0.26, 0.30, MAT.dark),
+    p(0, 0, -0.24, 0.12, 0.16, 0.9, MAT.green),
+    p(0, 0.09, -0.2, 0.11, 0.03, 0.7, MAT.dark),                          // Deckel
+    p(0, 0.16, -0.1, 0.03, 0.05, 0.28, MAT.dark),                         // Tragegriff
+    p(0, 0.12, -0.22, 0.03, 0.04, 0.03, MAT.dark),
+    p(0, 0.12, 0.02, 0.03, 0.04, 0.03, MAT.dark),
+    p(0, 0.03, -1.0, 0.06, 0.06, 0.7, MAT.dark),                          // Lauf
+    p(0, 0.05, -0.85, 0.09, 0.07, 0.4, MAT.metal),                        // Hitzeschild
+    p(0, 0.03, -1.4, 0.08, 0.08, 0.12, MAT.metal),
+    p(0, -0.2, -0.28, 0.20, 0.24, 0.28, MAT.tan),                         // Kastenmagazin
+    p(0, -0.08, -0.28, 0.21, 0.02, 0.29, MAT.dark),
+    p(-0.06, -0.28, -0.9, 0.03, 0.30, 0.03, MAT.metal, { z: 0.35 }),      // Zweibein
+    p(0.06, -0.28, -0.9, 0.03, 0.30, 0.03, MAT.metal, { z: -0.35 }),
     p(0, -0.16, 0.12, 0.08, 0.24, 0.11, MAT.grip, { x: -0.22 }),
-    p(0, 0.0, 0.42, 0.10, 0.16, 0.44, MAT.green),
-    p(0, 0.125, -0.06, 0.05, 0.07, 0.10, MAT.dark),
-    p(0, 0.125, -1.02, 0.04, 0.08, 0.05, MAT.dark),
-    p(0, -0.30, -0.86, 0.05, 0.22, 0.05, MAT.metal, { z: 0.4 }),
-    p(0, -0.30, -0.86, 0.05, 0.22, 0.05, MAT.metal, { z: -0.4 }),
+    ...triggerGuard(0.0),
+    p(0, 0.0, 0.44, 0.10, 0.16, 0.4, MAT.green),
+    p(0, 0.0, 0.65, 0.105, 0.17, 0.03, MAT.rubber),
+    ...rearSight(0.13, 0.12),
+    ...frontSight(0.13, -1.1),
   ],
-  revolver: [
-    p(0, 0, -0.14, 0.07, 0.11, 0.46, MAT.steel),
-    p(0, 0.01, -0.44, 0.045, 0.05, 0.30, MAT.steel),
-    p(0, -0.02, -0.10, 0.10, 0.12, 0.16, MAT.metal),
-    p(0, -0.15, 0.10, 0.065, 0.24, 0.10, MAT.wood, { x: -0.32 }),
-    p(0, 0.075, -0.06, 0.035, 0.045, 0.06, MAT.dark),
-    p(0, 0.075, -0.55, 0.03, 0.05, 0.04, MAT.dark),
-    p(0, -0.09, -0.02, 0.03, 0.07, 0.05, MAT.dark),
-  ],
-  pistol: [
-    p(0, 0, -0.14, 0.065, 0.11, 0.42, MAT.body),
-    p(0, 0.005, -0.40, 0.045, 0.05, 0.16, MAT.dark),
-    p(0, -0.16, 0.02, 0.06, 0.26, 0.10, MAT.grip, { x: -0.14 }),
-    p(0, 0.07, -0.05, 0.03, 0.04, 0.06, MAT.dark),
-    p(0, 0.07, -0.32, 0.025, 0.045, 0.04, MAT.dark),
-    p(0, -0.075, -0.04, 0.03, 0.06, 0.05, MAT.dark),
-  ],
+  // Bullpup-Feuerstoss-Gewehr (FAMAS-Stil) mit Tragegriff-Visier
   burst: [
-    p(0, 0, -0.24, 0.10, 0.14, 0.86, MAT.tan),
-    p(0, 0.02, -0.82, 0.06, 0.07, 0.44, MAT.dark),
-    p(0, 0.02, -1.08, 0.05, 0.05, 0.20, MAT.metal),
-    p(0, -0.20, -0.16, 0.07, 0.30, 0.14, MAT.dark),
-    p(0, -0.16, 0.10, 0.07, 0.23, 0.10, MAT.grip, { x: -0.24 }),
-    p(0, 0.0, 0.34, 0.085, 0.13, 0.40, MAT.tan),
-    p(0, 0.11, -0.20, 0.05, 0.06, 0.34, MAT.dark),
+    p(0, 0, -0.2, 0.10, 0.14, 0.9, MAT.tan),
+    p(0, 0.13, -0.15, 0.04, 0.05, 0.7, MAT.dark),                         // Tragegriff
+    p(0, 0.09, -0.48, 0.03, 0.04, 0.03, MAT.dark),
+    p(0, 0.09, 0.18, 0.03, 0.04, 0.03, MAT.dark),
+    p(0, 0.02, -0.95, 0.05, 0.05, 0.4, MAT.metal),                        // Lauf
+    p(0, 0.02, -1.18, 0.065, 0.065, 0.10, MAT.dark),
+    p(0, -0.2, 0.16, 0.07, 0.28, 0.12, MAT.dark, { x: 0.1 }),              // Magazin hinter dem Griff
+    p(0, -0.15, -0.14, 0.07, 0.22, 0.10, MAT.grip, { x: -0.2 }),
+    p(0, -0.115, -0.05, 0.05, 0.012, 0.40, MAT.dark),                     // langer Abzugsbuegel
+    p(0, -0.14, -0.25, 0.05, 0.06, 0.012, MAT.dark),
+    p(0, -0.10, -0.12, 0.012, 0.045, 0.018, MAT.metal),
+    p(0, -0.12, -0.62, 0.05, 0.12, 0.06, MAT.grip),                       // Vordergriff
+    p(0, 0.0, 0.62, 0.10, 0.15, 0.03, MAT.rubber),
+    p(0, 0.16, 0.10, 0.03, 0.04, 0.05, MAT.dark),                         // Kimme im Griff
+    p(0, 0.16, -0.45, 0.012, 0.045, 0.012, MAT.dark),
   ],
+  // DMR: langes Rohr, grosses Magazin, Zielfernrohr
+  marksman: [
+    p(0, 0.02, -0.22, 0.10, 0.12, 0.84, MAT.body),
+    p(0, -0.06, -0.05, 0.095, 0.09, 0.42, MAT.dark),
+    p(0, -0.24, -0.14, 0.07, 0.32, 0.15, MAT.dark, { x: 0.12 }),
+    p(0, 0.02, -0.86, 0.09, 0.10, 0.48, MAT.dark),
+    p(0, 0.03, -1.28, 0.045, 0.045, 0.44, MAT.metal),
+    p(0, 0.03, -1.52, 0.065, 0.065, 0.12, MAT.dark),
+    p(0, 0.17, -0.20, 0.055, 0.055, 0.44, MAT.dark),                      // ZF
+    p(0, 0.17, -0.46, 0.08, 0.08, 0.09, MAT.metal),
+    p(0, 0.17, 0.04, 0.07, 0.07, 0.08, MAT.metal),
+    p(0, 0.17, -0.51, 0.065, 0.065, 0.01, MAT.glow),
+    p(0, 0.115, -0.12, 0.045, 0.06, 0.04, MAT.metal),
+    p(0, 0.115, -0.30, 0.045, 0.06, 0.04, MAT.metal),
+    p(0, 0.06, 0.20, 0.06, 0.03, 0.06, MAT.metal),
+    p(0, -0.17, 0.12, 0.07, 0.24, 0.10, MAT.grip, { x: -0.25 }),
+    ...triggerGuard(0.0),
+    p(0, 0.02, 0.40, 0.06, 0.06, 0.36, MAT.metal),
+    p(0, 0.0, 0.54, 0.085, 0.14, 0.26, MAT.body),
+    p(0, 0.0, 0.68, 0.09, 0.15, 0.03, MAT.rubber),
+    p(0, 0.08, 0.5, 0.06, 0.03, 0.2, MAT.dark),                           // Wangenauflage
+    ...frontSight(0.12, -1.05),
+  ],
+  // Raketenwerfer: Rohr, Gefechtskopf, Visier, Hitzeschutz
   rpg: [
-    p(0, 0, -0.15, 0.14, 0.14, 1.5, MAT.green),
-    p(0, 0, -1.02, 0.19, 0.19, 0.18, MAT.dark),
-    p(0, 0, 0.52, 0.20, 0.20, 0.16, MAT.dark),
-    p(0, 0.02, -1.24, 0.16, 0.16, 0.34, MAT.red),
-    p(0, 0.02, -1.46, 0.09, 0.09, 0.18, MAT.dark),
+    p(0, 0, -0.1, 0.13, 0.13, 1.5, MAT.green),
+    p(0, 0, 0.62, 0.18, 0.18, 0.14, MAT.dark),                            // Trichter hinten
+    p(0, 0, -0.45, 0.15, 0.15, 0.3, MAT.wood),                            // Holz-Hitzeschutz
+    p(0, 0.02, -1.0, 0.16, 0.16, 0.18, MAT.dark),
+    p(0, 0.02, -1.25, 0.17, 0.17, 0.30, MAT.red),                         // Gefechtskopf
+    p(0, 0.02, -1.45, 0.11, 0.11, 0.16, MAT.red),
+    p(0, 0.02, -1.56, 0.06, 0.06, 0.08, MAT.dark),
     p(0, -0.17, 0.02, 0.07, 0.24, 0.11, MAT.grip, { x: -0.2 }),
     p(0, -0.15, -0.60, 0.06, 0.20, 0.09, MAT.dark, { x: -0.1 }),
-    p(0, 0.13, -0.30, 0.05, 0.12, 0.30, MAT.metal),
+    ...triggerGuard(-0.08),
+    p(0, 0.13, -0.25, 0.04, 0.12, 0.06, MAT.metal),                       // Visierhalter
+    p(0, 0.21, -0.25, 0.06, 0.06, 0.14, MAT.dark),                        // Optik
+    p(0, 0.21, -0.325, 0.05, 0.05, 0.01, MAT.glow),
+    p(0, -0.12, 0.35, 0.06, 0.10, 0.2, MAT.dark),                         // Schulterstuetze
   ],
-  akimbo: [
-    p(-0.13, 0, -0.14, 0.065, 0.11, 0.46, MAT.body),
-    p(-0.13, 0.005, -0.42, 0.045, 0.05, 0.20, MAT.dark),
-    p(-0.13, -0.17, 0.02, 0.06, 0.26, 0.10, MAT.grip, { x: -0.14 }),
-    p(0.13, 0, -0.14, 0.065, 0.11, 0.46, MAT.body),
-    p(0.13, 0.005, -0.42, 0.045, 0.05, 0.20, MAT.dark),
-    p(0.13, -0.17, 0.02, 0.06, 0.26, 0.10, MAT.grip, { x: -0.14 }),
+  // Alien Blaster: Energiewaffe mit Leuchtkern und Emitter
+  crossbow: [
+    p(0, 0, -0.2, 0.11, 0.15, 0.7, MAT.body),
+    p(0, 0.0, -0.1, 0.116, 0.04, 0.3, MAT.glow),                          // Energiekern
+    p(0, 0.09, -0.3, 0.06, 0.02, 0.5, MAT.metal),
+    p(0, 0.04, -0.75, 0.06, 0.09, 0.4, MAT.metal),                        // Kuehlrippen-Lauf
+    p(0, 0.04, -0.95, 0.03, 0.03, 0.4, MAT.glow),
+    p(0, 0.04, -1.12, 0.09, 0.09, 0.06, MAT.dark),                        // Emitter
+    p(0, 0.04, -1.12, 0.05, 0.05, 0.07, MAT.glow),
+    p(-0.07, 0.02, -0.3, 0.02, 0.10, 0.3, MAT.metal),                     // Seitenflossen
+    p(0.07, 0.02, -0.3, 0.02, 0.10, 0.3, MAT.metal),
+    p(0, -0.16, 0.06, 0.07, 0.24, 0.10, MAT.grip, { x: -0.22 }),
+    ...triggerGuard(-0.06),
+    p(0, 0, 0.32, 0.08, 0.12, 0.3, MAT.dark),
+    p(0, 0.04, 0.32, 0.05, 0.02, 0.28, MAT.glow),
+    p(0, 0.12, 0.0, 0.04, 0.05, 0.06, MAT.dark),                          // Holo-Visier
+    p(0, 0.15, -0.02, 0.035, 0.035, 0.008, MAT.glow),
   ],
-  // Kampfmesser: Griff hinten (+Z), Klinge nach vorn (-Z), Schneide unten
+  // Revolver mit gerundeter Trommel (rotierte Boxen), Hahn, Unterlauf
+  revolver: [
+    p(0, 0, -0.08, 0.07, 0.11, 0.36, MAT.steel),
+    p(0, 0.02, -0.42, 0.05, 0.06, 0.36, MAT.steel),                       // Lauf
+    p(0, -0.03, -0.42, 0.035, 0.035, 0.34, MAT.steel),                    // Unterlauf
+    p(0, -0.01, -0.10, 0.10, 0.10, 0.16, MAT.metal),                      // Trommel
+    p(0, -0.01, -0.10, 0.10, 0.10, 0.16, MAT.metal, { z: 0.52 }),
+    p(0, -0.01, -0.10, 0.10, 0.10, 0.16, MAT.metal, { z: 1.05 }),
+    p(0, -0.01, -0.10, 0.06, 0.06, 0.17, MAT.dark),
+    p(0, 0.07, 0.06, 0.02, 0.06, 0.05, MAT.dark, { x: 0.5 }),              // Hahn
+    p(0, -0.15, 0.10, 0.065, 0.24, 0.10, MAT.wood, { x: -0.32 }),
+    p(0.034, -0.14, 0.10, 0.006, 0.05, 0.05, MAT.brass, { x: -0.32 }),    // Medaillon
+    ...triggerGuard(-0.03, MAT.steel),
+    p(0, 0.075, -0.06, 0.035, 0.045, 0.06, MAT.dark),
+    p(0, 0.075, -0.58, 0.012, 0.04, 0.03, MAT.dark),
+  ],
+  // Pistole: Schlitten mit Griffrillen, Rahmen, Abzugsbuegel, Magazinboden
+  pistol: [
+    p(0, 0.01, -0.16, 0.065, 0.09, 0.44, MAT.body),                       // Schlitten
+    p(-0.034, 0.01, 0.0, 0.004, 0.06, 0.10, MAT.dark),
+    p(0.034, 0.01, 0.0, 0.004, 0.06, 0.10, MAT.dark),
+    p(0.034, 0.02, -0.22, 0.004, 0.035, 0.10, MAT.metal),                 // Auswurffenster
+    p(0, 0.005, -0.40, 0.035, 0.035, 0.06, MAT.metal),
+    p(0, -0.06, -0.10, 0.06, 0.05, 0.34, MAT.dark),                       // Rahmen
+    p(0, -0.09, -0.24, 0.05, 0.02, 0.12, MAT.metal),                      // Schiene
+    p(0, -0.18, 0.03, 0.06, 0.28, 0.10, MAT.grip, { x: -0.14 }),
+    p(0, -0.325, 0.06, 0.065, 0.02, 0.11, MAT.dark, { x: -0.14 }),        // Magazinboden
+    p(0, -0.115, -0.09, 0.05, 0.012, 0.14, MAT.dark),
+    p(0, -0.145, -0.16, 0.05, 0.06, 0.012, MAT.dark),
+    p(0, -0.10, -0.06, 0.012, 0.045, 0.018, MAT.metal),
+    p(0, 0.07, -0.05, 0.03, 0.03, 0.05, MAT.dark),
+    p(0, 0.07, -0.34, 0.012, 0.035, 0.03, MAT.dark),
+    p(0, 0.09, -0.36, 0.008, 0.008, 0.008, MAT.accent),                   // Leuchtkorn
+  ],
+  // Akimbo-Uzis
+  akimbo: [-0.13, 0.13].flatMap((x) => [
+    p(x, 0, -0.10, 0.065, 0.11, 0.5, MAT.body),
+    p(x, 0.01, -0.42, 0.04, 0.04, 0.2, MAT.dark),
+    p(x, 0.01, -0.54, 0.05, 0.05, 0.05, MAT.metal),
+    p(x, 0.07, 0.05, 0.03, 0.03, 0.05, MAT.metal),                        // Spannknopf
+    p(x, -0.17, 0.02, 0.06, 0.26, 0.10, MAT.grip, { x: -0.14 }),
+    p(x, -0.36, 0.045, 0.05, 0.12, 0.08, MAT.dark, { x: -0.14 }),         // Magazin im Griff
+    p(x, -0.115, -0.09, 0.05, 0.012, 0.14, MAT.dark),
+    p(x, -0.145, -0.16, 0.05, 0.06, 0.012, MAT.dark),
+    p(x, -0.10, -0.06, 0.012, 0.045, 0.018, MAT.metal),
+    p(x, 0.075, -0.32, 0.012, 0.03, 0.02, MAT.dark),
+    p(x, 0.075, 0.1, 0.04, 0.03, 0.04, MAT.dark),
+    p(x, 0.03, 0.22, 0.05, 0.03, 0.06, MAT.metal),                        // eingeklappter Schaft
+  ]),
+  // Taktisches Kampfmesser: Griff mit Wicklung, Parierstange,
+  // Klinge mit Hohlkehle, Saegezahnung am Ruecken, heller Schneide
   knife: [
-    p(0, -0.01, 0.12, 0.046, 0.085, 0.24, MAT.grip),
-    p(0, -0.01, 0.245, 0.05, 0.09, 0.03, MAT.metal),          // Knauf
-    p(0, 0.0, -0.005, 0.095, 0.028, 0.05, MAT.metal),         // Parierstange
-    p(0, 0.005, -0.26, 0.02, 0.08, 0.46, MAT.steel),          // Klinge
-    p(0, -0.036, -0.26, 0.012, 0.016, 0.46, MAT.edge),        // Schneide
-    p(0, 0.028, -0.52, 0.02, 0.045, 0.10, MAT.steel),         // Spitze
-    p(0, 0.032, -0.20, 0.006, 0.02, 0.36, MAT.dark),          // Blutrinne
+    p(0, -0.01, 0.14, 0.045, 0.08, 0.26, MAT.grip),
+    p(0, -0.01, 0.06, 0.05, 0.088, 0.03, MAT.rubber),
+    p(0, -0.01, 0.14, 0.05, 0.088, 0.03, MAT.rubber),
+    p(0, -0.01, 0.22, 0.05, 0.088, 0.03, MAT.rubber),
+    p(0, 0.033, 0.14, 0.008, 0.012, 0.24, MAT.glowR),                     // Akzentstreifen
+    p(0, -0.01, 0.28, 0.052, 0.09, 0.03, MAT.metal),                      // Knauf
+    p(0, 0.0, -0.005, 0.11, 0.03, 0.045, MAT.metal),                      // Parierstange
+    p(-0.05, -0.02, -0.005, 0.014, 0.04, 0.04, MAT.metal),
+    p(0.05, -0.02, -0.005, 0.014, 0.04, 0.04, MAT.metal),
+    p(0, 0.005, -0.26, 0.017, 0.085, 0.48, MAT.steelDark),                // Klinge
+    p(0, 0.0, -0.26, 0.019, 0.03, 0.48, MAT.steel),                       // Grat (heller)
+    p(0, 0.046, -0.24, 0.02, 0.012, 0.40, MAT.dark),                      // Ruecken
+    p(-0.010, 0.02, -0.22, 0.004, 0.02, 0.34, MAT.dark),                  // Hohlkehle
+    p(0.010, 0.02, -0.22, 0.004, 0.02, 0.34, MAT.dark),
+    p(0, -0.038, -0.26, 0.012, 0.012, 0.48, MAT.edge),                    // Schneide
+    p(0, 0.052, -0.06, 0.022, 0.012, 0.012, MAT.grip),                    // Saegezahnung
+    p(0, 0.052, -0.09, 0.022, 0.012, 0.012, MAT.grip),
+    p(0, 0.052, -0.12, 0.022, 0.012, 0.012, MAT.grip),
+    p(0, 0.052, -0.15, 0.022, 0.012, 0.012, MAT.grip),
+    p(0, 0.02, -0.54, 0.016, 0.05, 0.10, MAT.steel, { x: 0.35 }),          // Spitze
+    p(0, 0.0, -0.59, 0.014, 0.028, 0.05, MAT.edge, { x: 0.6 }),
   ],
-  // Katana: langer, umwickelter Griff, Tsuba, leicht gebogene Klinge
-  katana: [
-    p(0, -0.02, 0.10, 0.04, 0.05, 0.10, MAT.wrap),
-    p(0, -0.02, 0.20, 0.04, 0.05, 0.10, MAT.dark),
-    p(0, -0.02, 0.30, 0.04, 0.05, 0.10, MAT.wrap),
-    p(0, -0.02, 0.36, 0.044, 0.054, 0.03, MAT.accent),        // Kashira
-    p(0, 0.0, 0.03, 0.12, 0.028, 0.07, MAT.accent),           // Tsuba
-    p(0, 0.01, -0.30, 0.018, 0.075, 0.66, MAT.steel),         // Klinge hinten
-    p(0, 0.04, -0.82, 0.018, 0.07, 0.42, MAT.steel, { x: 0.06 }), // Klinge vorn (leicht gebogen)
-    p(0, -0.026, -0.30, 0.01, 0.014, 0.66, MAT.edge),         // Schneide
-    p(0, 0.008, -0.82, 0.01, 0.014, 0.40, MAT.edge, { x: 0.06 }),
-    p(0, 0.075, -1.06, 0.018, 0.04, 0.12, MAT.steel, { x: 0.10 }), // Kissaki (Spitze)
-  ],
+  katana: katanaParts(),
   nade: [
     p(0, 0, 0, 0.14, 0.18, 0.14, MAT.green),
+    p(0, 0, 0, 0.14, 0.18, 0.14, MAT.green, { y: 0.785 }),
+    p(0, 0.06, 0, 0.145, 0.02, 0.145, MAT.dark),
+    p(0, -0.04, 0, 0.145, 0.02, 0.145, MAT.dark),
     p(0, 0.11, 0, 0.06, 0.05, 0.06, MAT.metal),
     p(0.05, 0.10, 0, 0.02, 0.09, 0.02, MAT.metal),
+    p(0.07, 0.13, 0, 0.03, 0.03, 0.01, MAT.metal),                        // Splint
   ],
 };
 
@@ -185,10 +392,11 @@ function W(o) {
     pierce: 0,
     projectile: null,
     tracer: 0xffe08a, tracerWidth: 0.05,
-    sound: { vol: 0.8, lowCut: 200, hiCut: 5000, dur: 0.16, body: 95, punch: 1 },
+    sound: { vol: 0.8, lowCut: 200, hiCut: 5000, dur: 0.16, body: 95, punch: 1, crack: 1, mech: 0.5, tail: 0.8 },
     parts: PARTS.ar,
     muzzle: [0, 0.03, -1.42],
     hold: 'rifle',
+    equip: 'raise',
     grips: { r: [0, -0.16, 0.10], l: [0, -0.05, -0.62] },
     icon: '\u{1F52B}',
   }, o);
@@ -202,9 +410,9 @@ export const WEAPONS = {
     spread: 0.0035, spreadPerShot: 0.0055, spreadMax: 0.075,
     recoilV: 0.95, recoilH: 0.34,
     range: 320, falloffStart: 45, falloffEnd: 140, falloffMin: 0.6,
-    moveMult: 1.0, parts: PARTS.ar,
-    grips: { r: [0, -0.16, 0.10], l: [0, -0.05, -0.62] },
-    sound: { vol: 0.85, lowCut: 190, hiCut: 5400, dur: 0.15, body: 100, punch: 1 },
+    moveMult: 1.0, parts: PARTS.ar, muzzle: [0, 0.03, -1.46], sightY: 0.135,
+    grips: { r: [0, -0.16, 0.12], l: [0, -0.06, -0.72] },
+    sound: { vol: 0.85, lowCut: 190, hiCut: 5400, dur: 0.16, body: 100, punch: 1, crack: 1.0, mech: 0.6, tail: 0.8 },
   }),
   smg: W({
     id: 'smg', name: 'Submachine Gun', short: 'SMG',
@@ -212,10 +420,10 @@ export const WEAPONS = {
     spread: 0.008, spreadPerShot: 0.0055, spreadMax: 0.1, spreadMove: 0.018,
     recoilV: 0.55, recoilH: 0.42, kick: 0.035,
     range: 160, falloffStart: 22, falloffEnd: 70, falloffMin: 0.45,
-    moveMult: 1.14, adsFov: 0.82, parts: PARTS.smg, muzzle: [0, 0.02, -0.9],
-    grips: { r: [0, -0.14, 0.10], l: [0, -0.05, -0.45] },
+    moveMult: 1.14, adsFov: 0.82, parts: PARTS.smg, muzzle: [0, 0.02, -0.98], sightY: 0.115,
+    grips: { r: [0, -0.14, 0.10], l: [0, -0.06, -0.55] },
     tracer: 0xffe8b0,
-    sound: { vol: 0.6, lowCut: 260, hiCut: 6200, dur: 0.1, body: 130, punch: 0.8 },
+    sound: { vol: 0.6, lowCut: 260, hiCut: 6800, dur: 0.10, body: 140, punch: 0.75, crack: 0.8, mech: 0.35, tail: 0.5 },
   }),
   sniper: W({
     id: 'sniper', name: 'Sniper Rifle', short: 'SNIPER',
@@ -227,10 +435,10 @@ export const WEAPONS = {
     range: 500, falloffStart: 200, falloffEnd: 400, falloffMin: 0.9,
     adsFov: 0.16, adsTime: 0.24, scope: true, pierce: 1,
     moveMult: 0.86, adsMoveMult: 0.28,
-    switchTime: 0.7, parts: PARTS.sniper, muzzle: [0, 0.01, -1.36],
-    grips: { r: [0, -0.13, 0.16], l: [0, -0.06, -0.60] },
+    switchTime: 0.7, parts: PARTS.sniper, muzzle: [0, 0.03, -1.54], sightY: 0.16,
+    grips: { r: [0, -0.13, 0.16], l: [0, -0.07, -0.62] },
     tracer: 0xffffff, tracerWidth: 0.07,
-    sound: { vol: 1.25, lowCut: 120, hiCut: 4200, dur: 0.35, body: 62, punch: 1.5 },
+    sound: { vol: 1.3, lowCut: 100, hiCut: 3800, dur: 0.42, body: 55, punch: 1.6, crack: 1.2, mech: 0.9, mechDelay: 0.28, tail: 1.4 },
   }),
   shotgun: W({
     id: 'shotgun', name: 'Shotgun', short: 'SHOTGUN',
@@ -240,10 +448,10 @@ export const WEAPONS = {
     recoilV: 2.6, recoilH: 0.5, kick: 0.24,
     range: 60, falloffStart: 9, falloffEnd: 34, falloffMin: 0.18,
     adsFov: 0.86, moveMult: 0.96,
-    parts: PARTS.shotgun, muzzle: [0, 0.03, -1.2],
-    grips: { r: [0, -0.13, 0.12], l: [0, -0.08, -0.82] },
+    parts: PARTS.shotgun, muzzle: [0, 0.04, -1.32], sightY: 0.085,
+    grips: { r: [0, -0.13, 0.12], l: [0, -0.08, -0.72] },
     tracer: 0xffd27a, tracerWidth: 0.035,
-    sound: { vol: 1.15, lowCut: 110, hiCut: 3600, dur: 0.3, body: 70, punch: 1.4 },
+    sound: { vol: 1.2, lowCut: 100, hiCut: 3200, dur: 0.32, body: 65, punch: 1.5, crack: 0.9, mech: 0.8, mechDelay: 0.32, tail: 1.1 },
   }),
   lmg: W({
     id: 'lmg', name: 'LMG', short: 'LMG',
@@ -252,9 +460,9 @@ export const WEAPONS = {
     recoilV: 1.15, recoilH: 0.5, kick: 0.075,
     range: 320, falloffStart: 55, falloffEnd: 160, falloffMin: 0.65,
     moveMult: 0.82, adsMoveMult: 0.34, adsFov: 0.72, switchTime: 0.75,
-    parts: PARTS.lmg, muzzle: [0, 0.02, -1.4],
-    grips: { r: [0, -0.15, 0.12], l: [0, -0.10, -0.70] },
-    sound: { vol: 1.0, lowCut: 150, hiCut: 4800, dur: 0.2, body: 78, punch: 1.25 },
+    parts: PARTS.lmg, muzzle: [0, 0.03, -1.48], sightY: 0.135,
+    grips: { r: [0, -0.15, 0.12], l: [0, -0.10, -0.66] },
+    sound: { vol: 1.0, lowCut: 140, hiCut: 4600, dur: 0.2, body: 78, punch: 1.25, crack: 1.0, mech: 0.5, tail: 1.0 },
   }),
   marksman: W({
     id: 'marksman', name: 'Marksman', short: 'MARKSMAN',
@@ -263,10 +471,10 @@ export const WEAPONS = {
     recoilV: 1.9, recoilH: 0.4, kick: 0.14,
     range: 400, falloffStart: 90, falloffEnd: 240, falloffMin: 0.8,
     adsFov: 0.44, adsTime: 0.2, moveMult: 0.93,
-    parts: PARTS.burst, muzzle: [0, 0.02, -1.2],
-    grips: { r: [0, -0.15, 0.10], l: [0, -0.05, -0.66] },
+    parts: PARTS.marksman, muzzle: [0, 0.03, -1.58], sightY: 0.17,
+    grips: { r: [0, -0.16, 0.12], l: [0, -0.06, -0.78] },
     tracer: 0xfff0c0,
-    sound: { vol: 1.0, lowCut: 150, hiCut: 4600, dur: 0.22, body: 82, punch: 1.2 },
+    sound: { vol: 1.0, lowCut: 140, hiCut: 4600, dur: 0.24, body: 80, punch: 1.2, crack: 1.1, mech: 0.6, tail: 1.1 },
   }),
   burst: W({
     id: 'burst', name: 'Burst Rifle', short: 'BURST',
@@ -275,9 +483,9 @@ export const WEAPONS = {
     spread: 0.0025, spreadPerShot: 0.004, spreadMax: 0.06,
     recoilV: 0.85, recoilH: 0.28,
     range: 340, falloffStart: 60, falloffEnd: 170, falloffMin: 0.7,
-    adsFov: 0.62, parts: PARTS.burst, muzzle: [0, 0.02, -1.2],
-    grips: { r: [0, -0.15, 0.10], l: [0, -0.05, -0.66] },
-    sound: { vol: 0.8, lowCut: 210, hiCut: 5600, dur: 0.13, body: 105, punch: 0.95 },
+    adsFov: 0.62, parts: PARTS.burst, muzzle: [0, 0.02, -1.23], sightY: 0.16,
+    grips: { r: [0, -0.15, -0.14], l: [0, -0.10, -0.60] },
+    sound: { vol: 0.8, lowCut: 210, hiCut: 5600, dur: 0.13, body: 105, punch: 0.95, crack: 1.0, mech: 0.4, tail: 0.7 },
   }),
   akimbo: W({
     id: 'akimbo', name: 'Akimbo Uzi', short: 'AKIMBO',
@@ -286,11 +494,11 @@ export const WEAPONS = {
     recoilV: 0.45, recoilH: 0.55, kick: 0.03,
     range: 120, falloffStart: 18, falloffEnd: 55, falloffMin: 0.4,
     adsFov: 0.92, moveMult: 1.18,
-    parts: PARTS.akimbo, muzzle: [0, 0.0, -0.56], dualMuzzle: [[-0.13, 0, -0.56], [0.13, 0, -0.56]],
-    hold: 'akimbo',
+    parts: PARTS.akimbo, muzzle: [0, 0.01, -0.56], dualMuzzle: [[-0.13, 0.01, -0.56], [0.13, 0.01, -0.56]],
+    hold: 'akimbo', sightY: 0.02,
     grips: { r: [0.13, -0.16, 0.02], l: [-0.13, -0.16, 0.02] },
     vmPos: [0.0, -0.20, -0.62],
-    sound: { vol: 0.5, lowCut: 300, hiCut: 6600, dur: 0.08, body: 150, punch: 0.7 },
+    sound: { vol: 0.5, lowCut: 320, hiCut: 7200, dur: 0.08, body: 160, punch: 0.7, crack: 0.7, mech: 0.25, tail: 0.35 },
   }),
   rpg: W({
     id: 'rpg', name: 'Rocket Launcher', short: 'RPG',
@@ -301,11 +509,11 @@ export const WEAPONS = {
     adsFov: 0.78, moveMult: 0.85, switchTime: 0.8,
     projectile: { speed: 62, gravity: 5.5, radius: 0.28, color: 0xd8d8d8,
                   explode: { radius: 8.5, damage: 110, minMult: 0.22, force: 16, selfMult: 0.55 } },
-    parts: PARTS.rpg, muzzle: [0, 0.02, -1.6],
+    parts: PARTS.rpg, muzzle: [0, 0.02, -1.62], sightY: 0.21,
     hold: 'launcher',
     grips: { r: [0, -0.16, 0.02], l: [0, -0.14, -0.60] },
     vmPos: [0.21, -0.13, -0.62],
-    sound: { vol: 1.2, lowCut: 120, hiCut: 3200, dur: 0.4, body: 60, punch: 1.5 },
+    sound: { vol: 1.2, lowCut: 90, hiCut: 2600, dur: 0.5, body: 48, punch: 1.6, crack: 0.5, mech: 0, tail: 1.5, whoosh: 1 },
   }),
   crossbow: W({
     id: 'crossbow', name: 'Alien Blaster', short: 'BLASTER',
@@ -316,10 +524,10 @@ export const WEAPONS = {
     adsFov: 0.6, moveMult: 1.02,
     projectile: { speed: 105, gravity: 0, radius: 0.2, color: 0x2ee6ff, glow: true,
                   explode: { radius: 3.4, damage: 46, minMult: 0.3, force: 6, selfMult: 0.25 } },
-    parts: PARTS.smg, muzzle: [0, 0.02, -0.9],
-    grips: { r: [0, -0.14, 0.10], l: [0, -0.05, -0.45] },
+    parts: PARTS.crossbow, muzzle: [0, 0.04, -1.16], sightY: 0.15,
+    grips: { r: [0, -0.15, 0.06], l: [0, -0.05, -0.50] },
     tracer: 0x2ee6ff,
-    sound: { vol: 0.7, lowCut: 400, hiCut: 7000, dur: 0.18, body: 220, punch: 0.8 },
+    sound: { kind: 'energy', vol: 0.75 },
   }),
 
   // ---------------- Sekundaerwaffen ----------------
@@ -330,10 +538,10 @@ export const WEAPONS = {
     recoilV: 1.1, recoilH: 0.35, kick: 0.09,
     range: 140, falloffStart: 26, falloffEnd: 80, falloffMin: 0.45,
     adsFov: 0.8, moveMult: 1.12, switchTime: 0.3,
-    parts: PARTS.pistol, muzzle: [0, 0.0, -0.5],
+    parts: PARTS.pistol, muzzle: [0, 0.005, -0.44], sightY: 0.078,
     hold: 'pistol',
-    grips: { r: [0, -0.15, 0.02], l: [-0.035, -0.20, 0.0] },
-    sound: { vol: 0.6, lowCut: 260, hiCut: 6000, dur: 0.12, body: 120, punch: 0.9 },
+    grips: { r: [0, -0.16, 0.03], l: [-0.035, -0.21, 0.01] },
+    sound: { vol: 0.65, lowCut: 240, hiCut: 6200, dur: 0.13, body: 115, punch: 0.95, crack: 0.9, mech: 0.4, tail: 0.6 },
   }),
   revolver: W({
     id: 'revolver', name: 'Revolver', short: 'REVOLVER', slot: 1,
@@ -342,33 +550,37 @@ export const WEAPONS = {
     recoilV: 2.4, recoilH: 0.5, kick: 0.2,
     range: 200, falloffStart: 45, falloffEnd: 120, falloffMin: 0.55,
     adsFov: 0.66, moveMult: 1.05, switchTime: 0.38,
-    parts: PARTS.revolver, muzzle: [0, 0.01, -0.6],
+    parts: PARTS.revolver, muzzle: [0, 0.02, -0.62], sightY: 0.082,
     hold: 'pistol',
     grips: { r: [0, -0.14, 0.10], l: [-0.035, -0.19, 0.08] },
-    sound: { vol: 1.0, lowCut: 140, hiCut: 4600, dur: 0.26, body: 74, punch: 1.35 },
+    sound: { vol: 1.05, lowCut: 130, hiCut: 4400, dur: 0.28, body: 70, punch: 1.4, crack: 1.1, mech: 0.5, tail: 1.2 },
   }),
 
   // ---------------- Nahkampf ----------------
   knife: W({
     id: 'knife', name: 'Combat Knife', short: 'KNIFE', slot: 2,
-    damage: 55, headMult: 1.6, rpm: 130, auto: false, mag: Infinity, reserve: 0,
-    melee: true, meleeRange: 3.4, meleeArc: 0.55, meleeBackstab: 3.0, swing: 'slash', swingTime: 0.32,
-    moveMult: 1.25, switchTime: 0.25, adsFov: 1, spread: 0,
+    damage: 55, headMult: 1.6, rpm: 150, auto: false, mag: Infinity, reserve: 0,
+    melee: true, meleeRange: 3.4, meleeArc: 0.55, meleeBackstab: 3.0, swing: 'slash', swingTime: 0.30,
+    heavy: { damage: 100, meleeRange: 3.6, meleeBackstab: 1.5, swing: 'stab', swingTime: 0.62, hitAt: 0.42, lunge: 5.5 },
+    lunge: 3.5, knockback: 4,
+    moveMult: 1.25, switchTime: 0.42, adsFov: 1, spread: 0,
     parts: PARTS.knife, muzzle: [0, 0, -0.5],
-    hold: 'knife',
-    grips: { r: [0, -0.02, 0.11], l: null },
+    hold: 'knife', equip: 'flip',
+    grips: { r: [0, -0.01, 0.14], l: null },
     vmPos: [0.28, -0.27, -0.50],
     vmRot: [0.35, 0.45, -0.40],
     icon: '\u{1F52A}',
   }),
   katana: W({
     id: 'katana', name: 'Katana', short: 'KATANA', slot: 2,
-    damage: 95, headMult: 1.2, rpm: 100, auto: false, mag: Infinity, reserve: 0,
-    melee: true, meleeRange: 4.4, meleeArc: 0.6, meleeBackstab: 1.6, swing: 'sweep', swingTime: 0.42,
-    moveMult: 1.3, switchTime: 0.3, adsFov: 1, spread: 0,
+    damage: 95, headMult: 1.2, rpm: 110, auto: false, mag: Infinity, reserve: 0,
+    melee: true, meleeRange: 4.4, meleeArc: 0.6, meleeBackstab: 1.6, swing: 'sweep', swingTime: 0.40,
+    heavy: { damage: 150, meleeRange: 4.6, meleeBackstab: 1.3, swing: 'overhead', swingTime: 0.85, hitAt: 0.5, lunge: 7 },
+    lunge: 4.5, knockback: 7,
+    moveMult: 1.3, switchTime: 0.55, adsFov: 1, spread: 0,
     parts: PARTS.katana, muzzle: [0, 0, -1.0],
-    hold: 'katana',
-    grips: { r: [0, -0.02, 0.09], l: [0, -0.02, 0.28] },
+    hold: 'katana', equip: 'unsheathe',
+    grips: { r: [0, -0.02, 0.10], l: [0, -0.02, 0.30] },
     vmPos: [0.31, -0.33, -0.56],
     vmRot: [0.74, 0.04, -0.34],
     icon: '⚔',
