@@ -2,10 +2,12 @@
 // Menue: Tabs, Klassenauswahl, Einstellungen, Pause, Endscreen
 // ============================================================
 
-import { CLASSES } from '../game/weapons.js';
+import { CLASSES, WEAPONS } from '../game/weapons.js';
+import { SKINS } from '../game/skins.js';
 import { DIFFICULTY } from '../game/bot.js';
 import { buildSettingsUI, resetSettings } from '../core/settings.js';
 import { audio } from '../core/audio.js';
+import { SkinPreview } from './preview.js';
 
 const $ = (id) => document.getElementById(id);
 const LS = 'fragstorm.profile.v1';
@@ -20,6 +22,9 @@ export class Menu {
     this.h = handlers;
     this.classId = 'triggerman';
     this.inGame = false;
+    this.skins = {};               // weaponId -> skinId
+    this.skinWeapon = 'ar';
+    this.preview = null;
     this.el = {
       menu: $('menu'), loading: $('loading'), pause: $('pause'), end: $('endscreen'),
       classGrid: $('class-grid'), classDetail: $('class-detail'),
@@ -34,6 +39,7 @@ export class Menu {
     this._loadProfile();
     this._wireTabs();
     this._buildClasses();
+    this._buildSkins();
     this._wireOptions();
     buildSettingsUI(this.el.settingsGrid, (id, v) => this.h.onSettingChange && this.h.onSettingChange(id, v));
 
@@ -102,6 +108,84 @@ export class Menu {
     document.querySelectorAll('.tabpane').forEach(x => x.classList.remove('active'));
     const pane = $('pane-' + tab);
     if (pane) pane.classList.add('active');
+    if (tab === 'skins') this._showPreview();
+    else if (this.preview) this.preview.stop();
+  }
+
+  // --------------------------------------------------------
+  // Skins
+  // --------------------------------------------------------
+  _buildSkins() {
+    const list = $('skin-weapons');
+    if (!list) return;
+    list.innerHTML = '';
+    const weapons = Object.values(WEAPONS).filter(w => w.id !== 'grenade');
+    for (const w of weapons) {
+      const d = document.createElement('div');
+      d.className = 'skin-wpn' + (w.id === this.skinWeapon ? ' sel' : '');
+      d.dataset.id = w.id;
+      d.innerHTML = `<span>${w.name.toUpperCase()}</span><i></i>`;
+      d.addEventListener('click', () => {
+        audio.uiClick();
+        this.skinWeapon = w.id;
+        list.querySelectorAll('.skin-wpn').forEach(x => x.classList.toggle('sel', x.dataset.id === w.id));
+        this._renderSkinChips();
+        this._showPreview();
+      });
+      d.addEventListener('mouseenter', () => audio.uiHover());
+      list.appendChild(d);
+    }
+    this._renderSkinChips();
+    this._updateSkinDots();
+  }
+
+  _updateSkinDots() {
+    document.querySelectorAll('.skin-wpn').forEach((el) => {
+      const sid = this.skins[el.dataset.id] || 'default';
+      const s = SKINS.find(x => x.id === sid) || SKINS[0];
+      const dot = el.querySelector('i');
+      if (dot) dot.style.background = `linear-gradient(135deg, ${s.swatch[0]}, ${s.swatch[1]})`;
+    });
+  }
+
+  _renderSkinChips() {
+    const box = $('skin-list');
+    if (!box) return;
+    box.innerHTML = '';
+    const cur = this.skins[this.skinWeapon] || 'default';
+    const w = WEAPONS[this.skinWeapon];
+    $('skin-wname').textContent = w ? w.name.toUpperCase() : '';
+    for (const s of SKINS) {
+      const d = document.createElement('div');
+      d.className = 'skin-chip' + (s.id === cur ? ' sel' : '');
+      d.innerHTML =
+        `<div class="sw">${s.swatch.map(c => `<i style="background:${c}"></i>`).join('')}</div>` +
+        `<div><div class="sn">${s.name}</div><div class="sd">${s.desc}</div></div>`;
+      d.addEventListener('click', () => {
+        audio.uiClick();
+        this.skins[this.skinWeapon] = s.id;
+        box.querySelectorAll('.skin-chip').forEach(x => x.classList.remove('sel'));
+        d.classList.add('sel');
+        $('skin-sname').textContent = s.name;
+        this._updateSkinDots();
+        this._saveProfile();
+        this._showPreview();
+        this.h.onSkinChange && this.h.onSkinChange(this.skinWeapon, s.id);
+      });
+      d.addEventListener('mouseenter', () => audio.uiHover());
+      box.appendChild(d);
+    }
+    const sel = SKINS.find(x => x.id === cur) || SKINS[0];
+    $('skin-sname').textContent = sel.name;
+  }
+
+  _showPreview() {
+    const cv = $('skin-preview');
+    if (!cv) return;
+    if (!this.preview) this.preview = new SkinPreview(cv);
+    const w = WEAPONS[this.skinWeapon] || WEAPONS.ar;
+    this.preview.show(w, this.skins[this.skinWeapon] || 'default');
+    this.preview.start();
   }
 
   _buildClasses() {
@@ -174,6 +258,7 @@ export class Menu {
       scoreLimit: +e.limit.value,
       timeLimit: +e.timeL.value,
       classId: this.classId,
+      skins: Object.assign({}, this.skins),
     };
   }
 
@@ -190,6 +275,11 @@ export class Menu {
       if (p.scoreLimit) this.el.limit.value = p.scoreLimit;
       if (p.timeLimit) this.el.timeL.value = p.timeLimit;
       if (p.classId && CLASSES.some(c => c.id === p.classId)) this.classId = p.classId;
+      if (p.skins && typeof p.skins === 'object') {
+        for (const k of Object.keys(p.skins)) {
+          if (WEAPONS[k] && SKINS.some(s => s.id === p.skins[k])) this.skins[k] = p.skins[k];
+        }
+      }
     } catch (err) { /* ignorieren */ }
   }
 
@@ -212,7 +302,7 @@ export class Menu {
     if (this.el.classHint) this.el.classHint.classList.toggle('hidden', !this.inGame);
     if (tab) this._activateTab(tab);
   }
-  hideMenu() { this.el.menu.classList.add('hidden'); }
+  hideMenu() { this.el.menu.classList.add('hidden'); if (this.preview) this.preview.stop(); }
   get menuVisible() { return !this.el.menu.classList.contains('hidden'); }
 
   showPause() { this.el.pause.classList.remove('hidden'); }

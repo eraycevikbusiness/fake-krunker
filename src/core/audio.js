@@ -302,22 +302,62 @@ export class AudioEngine {
     this._osc(bus || this.busUi, this.ctx.currentTime, dur, type, freq, slideTo || freq, vol, 0.008);
   }
 
-  /** Trefferbestaetigung: knackiger Tick, Kopfschuss = heller Ping, Kill = Doppelklick */
-  hitmarker(headshot, kill) {
+  /**
+   * Trefferbestaetigung: knackiger Tick, Kopfschuss = heller Ping, Kill = Doppelklick.
+   * dist: Entfernung zum Treffer - weit weg klingt es duenner, leiser und kommt
+   * mit "Schalllaufzeit" etwas spaeter an.
+   */
+  hitmarker(headshot, kill, dist = 0) {
     if (!this.ready) return;
-    const t = this.ctx.currentTime;
+    const far = clamp((dist - 18) / 70, 0, 1);
+    const t = this.ctx.currentTime + clamp(dist / 360, 0, 0.15);
     const d = this.busUi;
+    const vol = 1 - far * 0.35;
+    const pitch = 1 + far * 0.35;
     if (headshot) {
-      this._osc(d, t, 0.10, 'sine', 2600, 2500, 0.22, 0.002);
-      this._osc(d, t, 0.14, 'sine', 3900, 3800, 0.10, 0.002);
-      this._burst(d, t, 0.02, 'highpass', 4000, 4000, 0.6, 0.25, 0.001);
+      this._osc(d, t, 0.10, 'sine', 2600 * pitch, 2500 * pitch, 0.22 * vol, 0.002);
+      this._osc(d, t, 0.14, 'sine', 3900 * pitch, 3800 * pitch, 0.10 * vol, 0.002);
+      this._burst(d, t, 0.02, 'highpass', 4000, 4000, 0.6, 0.25 * vol, 0.001);
     } else {
-      this._burst(d, t, 0.025, 'bandpass', 1800, 1200, 1.5, 0.35, 0.001);
-      this._osc(d, t, 0.045, 'sine', 1100, 750, 0.22, 0.002);
+      this._burst(d, t, 0.025, 'bandpass', 1800 * pitch, 1200 * pitch, 1.5 + far, 0.35 * vol, 0.001);
+      this._osc(d, t, 0.045 - far * 0.015, 'sine', 1100 * pitch, 750 * pitch, 0.22 * vol * (1 - far * 0.4), 0.002);
+      if (far < 0.5) this._bodyOsc(d, t, 0.05, 320, 140, 0.12 * (1 - far * 2));   // nah: mit Koerper
     }
     if (kill) {
       this._burst(d, t + 0.05, 0.03, 'bandpass', 1500, 900, 1.5, 0.3, 0.001);
       this._osc(d, t + 0.05, 0.06, 'sine', 900, 600, 0.2, 0.002);
+    }
+  }
+
+  /** Dash: kurzer Luftstoss */
+  dash(pos) {
+    if (!this.ready) return;
+    const out = this._out(this.busSfx, pos, 8, 40, 0.1);
+    if (!out) return;
+    const t = this.ctx.currentTime;
+    this._burst(out.node, t, 0.24, 'bandpass', 380, 2200, 1.4, 0.45 * out.gain, 0.02);
+    this._bodyOsc(out.node, t, 0.12, 160, 60, 0.25 * out.gain);
+  }
+
+  /** Wandlauf-Start: Schleifen an der Wand */
+  wallrun(pos) {
+    if (!this.ready) return;
+    const out = this._out(this.busSteps, pos, 8, 40, 0.1);
+    if (!out) return;
+    this._burst(out.node, this.ctx.currentTime, 0.18, 'bandpass', 700, 1600, 1.0, 0.3 * out.gain, 0.03);
+  }
+
+  /** Waffe inspizieren: leises Metall-/Stoff-Ticken */
+  inspect(hold) {
+    if (!this.ready) return;
+    const t = this.ctx.currentTime;
+    const d = this.busUi;
+    if (hold === 'knife' || hold === 'katana') {
+      this._burst(d, t, 0.08, 'bandpass', 3000, 7000, 3.0, 0.12, 0.01);
+      this._osc(d, t + 0.02, 0.16, 'sine', 4200, 4000, 0.05, 0.004);
+    } else {
+      this._burst(d, t, 0.05, 'bandpass', 1400, 900, 1.5, 0.14, 0.003);
+      this._burst(d, t + 0.02, 0.12, 'bandpass', 500, 350, 1.0, 0.06, 0.02);
     }
   }
 
@@ -404,25 +444,70 @@ export class AudioEngine {
     }
   }
 
-  step(pos, loud = 1) {
+  /** Schritt auf Untergrund: sand | dirt | stone | wood | metal | grate */
+  step(pos, loud = 1, surface = 'stone') {
     if (!this.ready) return;
-    const out = this._out(this.busSteps, pos, 6, 42, 0.08);
+    const out = this._out(this.busSteps, pos, 6, 42, surface === 'metal' || surface === 'grate' ? 0.16 : 0.08);
     if (!out) return;
     const t = this.ctx.currentTime;
-    const f = rand(320, 620);
-    this._burst(out.node, t, 0.07, 'bandpass', f, f * 0.8, 1.1, 0.32 * loud * out.gain, 0.004);
-    this._burst(out.node, t, 0.03, 'highpass', 3000, 3000, 0.7, 0.08 * loud * out.gain, 0.002);
+    const d = out.node;
+    const v = 0.32 * loud * out.gain;
+    switch (surface) {
+      case 'sand':
+        this._burst(d, t, 0.11, 'lowpass', 1000, 380, 0.7, v * 0.95, 0.01);
+        this._burst(d, t + 0.02, 0.07, 'bandpass', 2200, 1400, 0.8, v * 0.22, 0.012);
+        break;
+      case 'dirt':
+        this._burst(d, t, 0.09, 'lowpass', 800, 300, 0.8, v * 0.9, 0.006);
+        this._burst(d, t, 0.04, 'bandpass', 1500, 900, 1.0, v * 0.2, 0.004);
+        break;
+      case 'wood':
+        this._burst(d, t, 0.07, 'lowpass', 1300, 500, 0.9, v * 0.85, 0.003);
+        this._bodyOsc(d, t, 0.09, 240, 110, v * 0.55);
+        break;
+      case 'metal':
+        this._burst(d, t, 0.05, 'bandpass', 1500, 1100, 3.0, v * 0.7, 0.002);
+        this._osc(d, t, 0.16, 'sine', 2300 * rand(0.95, 1.05), 2200, v * 0.22, 0.002);
+        this._osc(d, t, 0.10, 'sine', 3400, 3300, v * 0.10, 0.002);
+        this._bodyOsc(d, t, 0.07, 170, 80, v * 0.4);
+        break;
+      case 'grate':
+        this._burst(d, t, 0.05, 'bandpass', 2400, 1600, 3.0, v * 0.6, 0.002);
+        this._burst(d, t + 0.03, 0.05, 'bandpass', 1900, 1400, 2.5, v * 0.3, 0.002);   // Rappeln
+        this._osc(d, t, 0.2, 'sine', 3100 * rand(0.95, 1.05), 3000, v * 0.18, 0.002);
+        this._bodyOsc(d, t, 0.06, 150, 70, v * 0.3);
+        break;
+      default: {
+        const f = rand(800, 1100);
+        this._burst(d, t, 0.06, 'bandpass', f, f * 0.65, 1.2, v, 0.003);
+        this._burst(d, t, 0.025, 'highpass', 3000, 3000, 0.7, v * 0.3, 0.002);
+      }
+    }
   }
 
   jump(pos) { this.click(pos, 480, 0.18, 0.07); }
 
-  land(pos, hard) {
+  land(pos, hard, surface = 'stone') {
     if (!this.ready) return;
-    const out = this._out(this.busSteps, pos, 8, 55, 0.1);
+    const out = this._out(this.busSteps, pos, 8, 55, 0.12);
     if (!out) return;
     const t = this.ctx.currentTime;
-    this._burst(out.node, t, 0.14, 'lowpass', hard ? 380 : 600, hard ? 380 : 600, 1.0, (hard ? 0.6 : 0.3) * out.gain, 0.006);
-    if (hard) this._bodyOsc(out.node, t, 0.12, 120, 40, 0.3 * out.gain);
+    const d = out.node;
+    const v = (hard ? 0.6 : 0.3) * out.gain;
+    if (surface === 'metal' || surface === 'grate') {
+      this._burst(d, t, 0.08, 'bandpass', 900, 600, 1.5, v * 0.9, 0.003);
+      this._osc(d, t, 0.28, 'sine', 1500, 1450, v * 0.3, 0.003);
+      this._osc(d, t, 0.2, 'sine', 2400, 2350, v * 0.15, 0.003);
+      this._bodyOsc(d, t, 0.14, 130, 50, v * 0.6);
+    } else if (surface === 'wood') {
+      this._burst(d, t, 0.12, 'lowpass', 900, 350, 0.9, v * 0.9, 0.004);
+      this._bodyOsc(d, t, 0.16, 160, 60, v * 0.7);
+    } else if (surface === 'sand' || surface === 'dirt') {
+      this._burst(d, t, 0.16, 'lowpass', 500, 220, 0.8, v * 1.0, 0.008);
+    } else {
+      this._burst(d, t, 0.14, 'lowpass', hard ? 380 : 600, hard ? 380 : 600, 1.0, v, 0.006);
+      if (hard) this._bodyOsc(d, t, 0.12, 120, 40, 0.3 * out.gain);
+    }
   }
 
   reloadStep(pos, kind) {

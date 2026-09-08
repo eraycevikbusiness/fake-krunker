@@ -625,8 +625,8 @@ export const CLASSES = [
     id: 'rungun', name: 'Run N Gun', icon: '\u{1F3C3}',
     desc: 'Extrem schnell und wendig, mit Doppelsprung. Die MP zerlegt Gegner auf kurze Distanz.',
     primary: 'smg', secondary: 'pistol', melee: 'knife',
-    hp: 90, armor: 0, speed: 1.16, jumps: 2, nades: 2,
-    perks: ['Doppelsprung', '+16% Tempo', 'Schneller Slide'],
+    hp: 90, armor: 0, speed: 1.16, jumps: 2, nades: 2, dash: true,
+    perks: ['Doppelsprung', 'Dash (E)', '+16% Tempo'],
     stats: { schaden: 0.4, feuerrate: 0.88, reichweite: 0.35, mobilitaet: 1.0 },
   },
   {
@@ -673,8 +673,8 @@ export const CLASSES = [
     id: 'agent', name: 'Agent', icon: '\u{1F576}',
     desc: 'Zwei Uzis, absurde Feuerrate, maximale Mobilität. Nachladen dauert allerdings ewig.',
     primary: 'akimbo', secondary: 'pistol', melee: 'katana',
-    hp: 85, armor: 0, speed: 1.2, jumps: 2, nades: 2,
-    perks: ['Doppelsprung', '+20% Tempo', 'Katana'],
+    hp: 85, armor: 0, speed: 1.2, jumps: 2, nades: 2, dash: true, wallrun: true,
+    perks: ['Doppelsprung', 'Dash (E)', 'Wandlauf', 'Katana'],
     stats: { schaden: 0.35, feuerrate: 1.0, reichweite: 0.28, mobilitaet: 1.0 },
   },
   {
@@ -689,8 +689,8 @@ export const CLASSES = [
     id: 'ninja', name: 'Ninja', icon: '\u{1F977}',
     desc: 'Katana und Alien Blaster. Dreifachsprung, leise Schritte, extreme Beweglichkeit.',
     primary: 'crossbow', secondary: 'pistol', melee: 'katana',
-    hp: 85, armor: 0, speed: 1.22, jumps: 3, nades: 1,
-    perks: ['Dreifachsprung', 'Leise', 'Katana One-Hit'],
+    hp: 85, armor: 0, speed: 1.22, jumps: 3, nades: 1, dash: true, wallrun: true,
+    perks: ['Dreifachsprung', 'Wandlauf', 'Dash (E)', 'Leise'],
     stats: { schaden: 0.66, feuerrate: 0.4, reichweite: 0.5, mobilitaet: 1.0 },
   },
 ];

@@ -53,6 +53,15 @@ export const PHYS = {
 
   CROUCH_RATE: 10,
   STAND_RATE: 8,
+
+  DASH_SPEED: 27,               // Klassen-Perk: kurzer Sprint-Stoss (Taste E)
+  DASH_TIME: 0.20,
+  DASH_COOLDOWN: 2.4,
+
+  WALLRUN_TIME: 1.3,            // Klassen-Perk: an der Wand entlanglaufen
+  WALLRUN_MIN_SPEED: 5.5,
+  WALLRUN_GRAVITY: 0.22,        // Anteil der Schwerkraft waehrend des Wandlaufs
+  WALLJUMP_OUT: 8.5,
 };
 
 // Trefferzonen im lokalen Raum (x rechts, y hoch, -z vorn), volle Hoehe.
@@ -96,6 +105,16 @@ export class Actor {
     this.landImpact = 0;
     this.stepDist = 0;
     this.airTime = 0;
+    this.surface = 'stone';
+
+    // Klassen-Perks: Dash und Wandlauf
+    this.canDash = false;
+    this.canWallrun = false;
+    this.dashT = 0;
+    this.dashCooldown = 0;
+    this.wallrun = null;          // { nx, nz } Wandnormale waehrend des Wandlaufs
+    this.wallrunT = 0;
+    this.wallrunCooldown = 0;
 
     this.alive = false;
     this.hp = 100;
@@ -140,6 +159,7 @@ export class Actor {
       fwd: 0, side: 0, jump: false, jumpPressed: false, autoJump: false,
       crouch: false, sprint: false, fire: false, ads: false,
       reload: false, nade: false, melee: false, switchTo: -1,
+      dash: false, inspect: false,
     };
 
     this.model = null;
@@ -156,6 +176,8 @@ export class Actor {
     this.maxNades = cls.nades;
     this.speedMult = cls.speed;
     this.maxJumps = cls.jumps;
+    this.canDash = !!cls.dash;
+    this.canWallrun = !!cls.wallrun;
     this.slots = [
       this._mkSlot(WEAPONS[cls.primary]),
       this._mkSlot(WEAPONS[cls.secondary]),
@@ -194,6 +216,11 @@ export class Actor {
     this.wasGrounded = false;
     this.airTime = 0;
     this.landImpact = 0;
+    this.dashT = 0;
+    this.dashCooldown = 0;
+    this.wallrun = null;
+    this.wallrunT = 0;
+    this.wallrunCooldown = 0;
     this.spawnProtect = 1.4;
     this.nades = this.maxNades;
     this.fireTimer = 0;
@@ -214,7 +241,7 @@ export class Actor {
       s.pendingSingle = 0;
     }
     const it = this.intent;
-    it.fire = it.reload = it.nade = it.melee = it.jumpPressed = false;
+    it.fire = it.reload = it.nade = it.melee = it.jumpPressed = it.dash = it.inspect = false;
     it.switchTo = -1;
     if (this.model) this.model.resetDeath();
   }
@@ -316,6 +343,9 @@ export class Actor {
     if (this.jumpBuffer > 0) this.jumpBuffer -= dt;
     if (this.coyote > 0) this.coyote -= dt;
     if (this.sinceJump < 10) this.sinceJump += dt;
+    if (this.dashCooldown > 0) this.dashCooldown -= dt;
+    if (this.dashT > 0) this.dashT -= dt;
+    if (this.wallrunCooldown > 0) this.wallrunCooldown -= dt;
     if (it.jumpPressed) { this.jumpBuffer = P.JUMP_BUFFER; it.jumpPressed = false; }
 
     let speed2 = Math.hypot(this.vel.x, this.vel.z);
@@ -372,10 +402,39 @@ export class Actor {
     this.sprinting = sprinting;
     const wishSpeed = wl > 0.0001 ? maxSpeed * Math.min(1, wl) : 0;
 
+    // ---- Dash (Klassen-Perk): kurzer Stoss in Wunschrichtung, auch in der Luft ----
+    if (it.dash) {
+      it.dash = false;
+      if (this.canDash && this.dashCooldown <= 0 && !this.sliding) {
+        let dx = wx, dz = wz;
+        if (wl < 0.001) { dx = -sin; dz = -cos; }
+        this.vel.x = dx * P.DASH_SPEED;
+        this.vel.z = dz * P.DASH_SPEED;
+        if (!this.grounded) this.vel.y = Math.max(this.vel.y, 0);
+        this.dashT = P.DASH_TIME;
+        this.dashCooldown = P.DASH_COOLDOWN;
+        this.wallrun = null;
+        this.game.onDash && this.game.onDash(this);
+      }
+    }
+    const dashing = this.dashT > 0;
+
     // ---- Springen (vor der Reibung, damit Bunny-Hop keine Geschwindigkeit verliert) ----
     let didJump = false;
     const wantJump = this.jumpBuffer > 0 || (it.jump && it.autoJump);
-    if (wantJump && (this.grounded || this.coyote > 0)) {
+    if (this.wallrun && this.jumpBuffer > 0) {
+      // Wandsprung: von der Wand weg und nach oben, Doppelsprung bleibt erhalten
+      const wr = this.wallrun;
+      this.vel.x += wr.nx * P.WALLJUMP_OUT;
+      this.vel.z += wr.nz * P.WALLJUMP_OUT;
+      this.vel.y = P.JUMP_VEL * 0.95;
+      this.wallrun = null;
+      this.wallrunCooldown = 0.35;
+      this.jumpBuffer = 0;
+      this.sinceJump = 0;
+      didJump = true;
+      this.game.onJump && this.game.onJump(this);
+    } else if (wantJump && (this.grounded || this.coyote > 0)) {
       this.vel.y = P.JUMP_VEL;
       this.grounded = false;
       this.coyote = 0;
@@ -402,7 +461,15 @@ export class Actor {
     }
 
     // ---- Reibung / Beschleunigung ----
-    if (this.grounded && !didJump) {
+    if (dashing) {
+      // Waehrend des Dashs: keine Reibung, keine Lenkung, Schwerkraft reduziert
+    } else if (this.wallrun) {
+      // Wandlauf: Tempo entlang der Wand halten, leicht an die Wand druecken
+      const wr = this.wallrun;
+      this._accelerate(wx, wz, Math.min(wishSpeed, P.AIR_WISH_CAP), P.AIR_ACCEL * 0.6, dt);
+      this.vel.x += -wr.nx * 1.5;
+      this.vel.z += -wr.nz * 1.5;
+    } else if (this.grounded && !didJump) {
       const fr = this.sliding ? P.SLIDE_FRICTION : P.FRICTION;
       const sp = Math.hypot(this.vel.x, this.vel.z);
       if (sp > 0.001) {
@@ -440,12 +507,18 @@ export class Actor {
     }
 
     // ---- Schwerkraft ----
-    this.vel.y -= P.GRAVITY * dt;
+    if (this.wallrun) {
+      this.vel.y -= P.GRAVITY * P.WALLRUN_GRAVITY * dt;
+      if (this.vel.y < -3) this.vel.y = -3;
+    } else {
+      this.vel.y -= P.GRAVITY * (dashing ? 0.3 : 1) * dt;
+    }
     if (this.vel.y < -P.MAX_FALL) this.vel.y = -P.MAX_FALL;
 
     // ---- Bewegen + Kollision ----
     this.wasGrounded = this.grounded;
     const before = this.vel.y;
+    const preVx = this.vel.x, preVz = this.vel.z;
     const res = world.moveActor(
       this.pos, this.vel.x * dt, this.vel.y * dt, this.vel.z * dt,
       this.radius, this.height, (this.grounded || this.vel.y <= 0) ? P.STEP : 0
@@ -457,6 +530,36 @@ export class Actor {
     if (res.stepped > 0.02 && this.onStep) this.onStep(res.stepped);
 
     let grounded = res.ground;
+
+    // ---- Wandlauf: Start / Ende ----
+    if (this.wallrun) {
+      const wr = this.wallrun;
+      this.wallrunT += dt;
+      const tangential = Math.hypot(this.vel.x, this.vel.z);
+      const wallStillThere = !world.isFree(
+        this.pos.x - wr.nx * (this.radius + 0.22), this.pos.y + 0.4, this.pos.z - wr.nz * (this.radius + 0.22),
+        this.radius * 0.5, this.height * 0.5);
+      const pushingAway = wl > 0.001 && (wx * wr.nx + wz * wr.nz) > 0.7;
+      const reason = grounded ? 'ground' : !wallStillThere ? 'nowall' : this.wallrunT > P.WALLRUN_TIME ? 'time'
+        : tangential < P.WALLRUN_MIN_SPEED * 0.6 ? 'slow' : pushingAway ? 'away' : null;
+      if (reason) {
+        this.wallrun = null;
+        this.wallrunEnd = reason;
+        this.wallrunCooldown = 0.3;
+      }
+    } else if (this.canWallrun && !grounded && !dashing && this.wallrunCooldown <= 0 && (res.wallX || res.wallZ) &&
+               this.vel.y < 9 && this.sinceJump > 0.08) {
+      let nx = 0, nz = 0;
+      if (res.wallX && Math.abs(preVx) > 0.5) nx = -Math.sign(preVx);
+      else if (res.wallZ && Math.abs(preVz) > 0.5) nz = -Math.sign(preVz);
+      const tangential = Math.hypot(this.vel.x, this.vel.z);
+      if ((nx !== 0 || nz !== 0) && tangential > P.WALLRUN_MIN_SPEED) {
+        this.wallrun = { nx, nz };
+        this.wallrunT = 0;
+        this.vel.y = Math.max(this.vel.y, 3.2);
+        this.game.onWallrunStart && this.game.onWallrunStart(this);
+      }
+    }
 
     // Boden-Snapping: beim Abwaertsgehen auf Treppen/Rampen nicht abheben
     if (!grounded && this.wasGrounded && !didJump && this.vel.y <= 0.01 && this.sinceJump > 0.1) {
@@ -480,7 +583,8 @@ export class Actor {
         this.landImpact = clamp(impact / 26, 0, 1);
         this.jumpsLeft = this.maxJumps;
         this.airTime = 0;
-        this.game.onLand && this.game.onLand(this, impact);
+        this.surface = world.surfaceAt(this.pos.x, this.pos.y, this.pos.z, this.radius * 0.8);
+        this.game.onLand && this.game.onLand(this, impact, this.surface);
         if (this.onLanded) this.onLanded(impact);
         if (impact > P.FALL_DMG_START) {
           const dmg = (impact - P.FALL_DMG_START) * P.FALL_DMG_SCALE;
@@ -512,16 +616,22 @@ export class Actor {
     // ---- Ausserhalb der Karte? ----
     if (this.pos.y < -30) this.game.damageActor(this, null, 9999, 'void', null);
 
-    // ---- Schrittgeraeusche ----
+    // ---- Schrittgeraeusche (nach Untergrund) ----
     const hs = Math.hypot(this.vel.x, this.vel.z);
-    if (this.grounded && hs > 1.5 && !this.sliding) {
+    if ((this.grounded || this.wallrun) && hs > 1.5 && !this.sliding) {
       this.stepDist += hs * dt;
-      const interval = this.crouching ? 3.2 : 2.35;
+      const interval = this.crouching ? 3.2 : (this.wallrun ? 1.9 : 2.35);
       if (this.stepDist > interval) {
         this.stepDist = 0;
-        this.game.onFootstep && this.game.onFootstep(this, hs);
+        if (this.wallrun) {
+          const wr = this.wallrun;
+          this.surface = world.surfaceAt(this.pos.x - wr.nx * (this.radius + 0.25), this.pos.y + 0.8, this.pos.z - wr.nz * (this.radius + 0.25), 0.3);
+        } else {
+          this.surface = world.surfaceAt(this.pos.x, this.pos.y, this.pos.z, this.radius * 0.8);
+        }
+        this.game.onFootstep && this.game.onFootstep(this, hs, this.surface);
       }
-    } else if (!this.grounded) {
+    } else if (!this.grounded && !this.wallrun) {
       this.stepDist = 1.6;
     }
 

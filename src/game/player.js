@@ -41,6 +41,7 @@ export class LocalPlayer extends Actor {
 
     this.lookDX = 0;
     this.lookDY = 0;
+    this.fHold = 0;
 
     this.deathCamT = 0;
     this.deathYaw = 0;
@@ -198,7 +199,22 @@ export class LocalPlayer extends Actor {
     it.fire = input.mouseDown(0);
     if (input.justDown('KeyR')) it.reload = true;
     if (input.justDown('KeyG')) it.nade = true;
-    if (input.justDown('KeyF')) it.melee = true;
+    if (input.justDown('KeyE')) it.dash = true;
+
+    // F: kurz tippen = Nahkampfschlag, halten = Waffe inspizieren
+    if (input.justDown('KeyF')) this.fHold = 0.0001;
+    if (this.fHold > 0) {
+      if (input.down('KeyF')) {
+        this.fHold += dt;
+        it.inspect = this.fHold > 0.18;
+      } else {
+        if (this.fHold <= 0.18) it.melee = true;
+        this.fHold = 0;
+        it.inspect = false;
+      }
+    } else {
+      it.inspect = false;
+    }
 
     // Waffenwechsel
     if (input.justDown('Digit1')) it.switchTo = 0;
@@ -250,10 +266,17 @@ export class LocalPlayer extends Actor {
     this.camBob.x = damp(this.camBob.x, Math.cos(this.camBobPhase) * amp, 12, dt);
     this.camBob.y = damp(this.camBob.y, -Math.abs(Math.sin(this.camBobPhase)) * amp * 1.2, 12, dt);
 
-    // Seitliche Neigung beim Strafen / Slide
+    // Seitliche Neigung beim Strafen / Slide / Wandlauf
     const strafeTilt = -this.intent.side * 0.02 * (this.grounded ? 1 : 0.6);
     const slideTilt = this.sliding ? 0.07 : 0;
-    this.viewRoll = damp(this.viewRoll, strafeTilt + slideTilt, 9, dt);
+    let wallTilt = 0;
+    if (this.wallrun) {
+      // Kamera neigt sich von der Wand weg
+      const rx = Math.cos(this.yaw), rz = -Math.sin(this.yaw);   // Rechts-Vektor
+      const side = this.wallrun.nx * rx + this.wallrun.nz * rz;   // >0: Wand links
+      wallTilt = -side * 0.24;
+    }
+    this.viewRoll = damp(this.viewRoll, strafeTilt + slideTilt + wallTilt, this.wallrun ? 7 : 9, dt);
   }
 
   // --------------------------------------------------------
@@ -337,6 +360,8 @@ export class LocalPlayer extends Actor {
     const over = clamp((hs - PHYS.BASE_SPEED * 0.9) / Math.max(1, maxS), 0, 1.4);
     fov += over * 9 * (1 - this.adsAmount);
     if (this.sliding) fov += 4 * (1 - this.adsAmount);
+    if (this.dashT > 0) fov += 7;
+    if (this.wallrun) fov += 3;
     return fov;
   }
 }

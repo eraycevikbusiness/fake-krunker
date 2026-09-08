@@ -14,6 +14,7 @@ import { clamp, damp, lerp, rand } from '../core/utils.js';
 import { settings } from '../core/settings.js';
 import { mergeBoxes } from '../fx/geom.js';
 import { makePropMaterial } from '../fx/materials.js';
+import { applySkin } from './skins.js';
 
 const VM_SCALE = 0.53;
 const MELEE_SCALE = 0.80;
@@ -203,6 +204,12 @@ export class ViewModel {
     this.swingSide = 0;
     this.equipKind = 'raise';
     this.hidden = false;
+    this.skinId = 'default';
+    this.inspectHold = false;
+    this.inspectT = 0;
+    this.inspectK = 0;
+    this.inspectLoop = -1;
+    this.dashK = 0;
 
     this._basePos = new THREE.Vector3();
     this._adsPos = new THREE.Vector3();
@@ -227,12 +234,16 @@ export class ViewModel {
     return g;
   }
 
-  setWeapon(weapon, skinColor) {
+  setWeapon(weapon, skinColor, skinId) {
     if (this.mesh) {
       this.root.remove(this.mesh);
       this.mesh.geometry.dispose();
       this.mesh = null;
     }
+    this.skinId = skinId || 'default';
+    this.inspectT = 0;
+    this.inspectK = 0;
+    this.inspectLoop = -1;
     const skin = skinColor || 0xe0b090;
     if (!this.armR || this.skin !== skin) {
       if (this.armR) {
@@ -246,7 +257,7 @@ export class ViewModel {
     }
 
     this.weapon = weapon;
-    this.mesh = new THREE.Mesh(mergeBoxes(weapon.parts || [], { chamfer: 0.0045 }), this.mat);
+    this.mesh = new THREE.Mesh(mergeBoxes(applySkin(weapon.parts || [], this.skinId), { chamfer: 0.0045 }), this.mat);
     this.mesh.scale.setScalar(weapon.melee ? VM_SCALE * MELEE_SCALE : VM_SCALE);
     this.root.add(this.mesh);
 
@@ -310,6 +321,12 @@ export class ViewModel {
     this.recoilRot = Math.max(-0.5, this.recoilRot - (heavy ? 0.22 : 0.10));
     this.recoilRoll += rand(-0.14, 0.14);
   }
+
+  /** F halten: Waffe inspizieren (wird pro Frame gesetzt) */
+  setInspect(on) { this.inspectHold = !!on; }
+
+  /** Dash: Waffe zuckt kurz zurueck */
+  dash() { this.dashK = 1; }
 
   _showFlash(scale) {
     this.flash.visible = true;
@@ -475,11 +492,49 @@ export class ViewModel {
       rx += curve(t, sw.rx); ry += curve(t, sw.ry); rz += curve(t, sw.rz);
     }
 
+    // Dash: Waffe wird kurz nach hinten/unten gerissen
+    if (this.dashK > 0.001) {
+      this.dashK = damp(this.dashK, 0, 7, dt);
+      p.z += this.dashK * 0.14; p.y -= this.dashK * 0.06; p.x += this.dashK * 0.04;
+      rx += this.dashK * 0.25; rz += this.dashK * 0.2;
+    }
+
+    // ---- Inspizieren (F halten) ----
+    let meshSpinY = 0, meshSpinZ = 0;
+    const busy = this.reloadT > 0 || this.switchT > 0 || this.swingT > 0 || adsK > 0.05 || s.firing || this.sprintT > 0.5;
+    const wantInspect = this.inspectHold && !busy;
+    this.inspectK = damp(this.inspectK, wantInspect ? 1 : 0, wantInspect ? 5 : 9, dt);
+    if (wantInspect) this.inspectT += dt;
+    else if (this.inspectK < 0.01) { this.inspectT = 0; this.inspectLoop = -1; }
+    if (this.inspectK > 0.002) {
+      const k = this.inspectK;
+      const T = w.melee ? 3.0 : 3.6;
+      const loop = Math.floor(this.inspectT / T);
+      if (loop !== this.inspectLoop) { this.inspectLoop = loop; this.onInspectLoop && this.onInspectLoop(); }
+      const u = (this.inspectT % T) / T;
+      if (w.melee) {
+        // Messer/Katana: anheben, Klinge zur Kamera drehen, Flip, andere Seite zeigen
+        p.x += k * -0.14; p.y += k * 0.16; p.z += k * 0.02;
+        rx += k * curve(u, [[0, 0], [0.2, -0.55], [0.5, -0.65], [0.8, -0.5], [1, 0]]);
+        ry += k * curve(u, [[0, 0], [0.2, 0.35], [0.5, 0.2], [0.8, -0.2], [1, 0]]);
+        rz += k * curve(u, [[0, 0], [0.2, 0.5], [0.5, 0.3], [0.8, 0.45], [1, 0]]);
+        meshSpinZ = k * curve(u, [[0, 0], [0.25, 0], [0.55, Math.PI], [0.85, Math.PI * 2], [1, Math.PI * 2]]);
+        meshSpin += k * curve(u, [[0, 0], [0.3, 0], [0.5, Math.PI * 2], [1, Math.PI * 2]]);
+      } else {
+        // Schusswaffe: zur Mitte ziehen, links und rechts zeigen, kippen
+        p.x += k * -0.10; p.y += k * 0.04; p.z += k * 0.04;
+        ry += k * curve(u, [[0, 0], [0.22, 1.05], [0.45, 0.9], [0.7, -0.85], [1, 0]]);
+        rx += k * curve(u, [[0, 0], [0.22, 0.15], [0.45, -0.35], [0.7, -0.2], [1, 0]]);
+        rz += k * curve(u, [[0, 0], [0.22, 0.35], [0.45, 0.2], [0.7, -0.4], [1, 0]]);
+        meshSpinY = k * curve(u, [[0, 0], [0.55, 0], [0.85, Math.PI * 2], [1, Math.PI * 2]]) * 0.0;
+      }
+    }
+
     this.root.position.copy(p);
     this.root.rotation.set(rx, ry, rz);
 
     const br = this._baseRot;
-    this.mesh.rotation.set(br.x * (1 - adsK) + meshSpin, br.y * (1 - adsK), br.z * (1 - adsK));
+    this.mesh.rotation.set(br.x * (1 - adsK) + meshSpin, br.y * (1 - adsK) + meshSpinY, br.z * (1 - adsK) + meshSpinZ);
 
     // ---- Arme per Mini-IK ----
     this.root.updateMatrixWorld(true);

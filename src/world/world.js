@@ -167,6 +167,7 @@ export class World {
           maxx: max.x, maxy: max.y, maxz: max.z,
           cx: box.cx, cy: box.by + box.h / 2, cz: box.cz,
           rad: Math.sqrt(box.w * box.w + box.h * box.h + box.d * box.d) * 0.5,
+          surface: box.surface || 'stone',
           _i: 0,
         });
       }
@@ -455,6 +456,20 @@ export class World {
   groundAt(x, z, fromY = 80) {
     const h = this.raycast(x, fromY, z, 0, -1, 0, fromY + 20);
     return h ? h.y : 0;
+  }
+
+  /** Oberflaechentyp unter den Fuessen (fuer Schrittgeraeusche) */
+  surfaceAt(x, y, z, r) {
+    const list = this._tmpList4 || (this._tmpList4 = []);
+    this.query(x - r, z - r, x + r, z + r, list);
+    let best = null, bestY = -Infinity;
+    for (let i = 0; i < list.length; i++) {
+      const c = list[i];
+      if (c.maxy > y + 0.12 || c.maxy < y - 0.4) continue;
+      if (x + r <= c.minx || x - r >= c.maxx || z + r <= c.minz || z - r >= c.maxz) continue;
+      if (c.maxy > bestY) { bestY = c.maxy; best = c; }
+    }
+    return best ? best.surface : 'stone';
   }
 
   // --------------------------------------------------------

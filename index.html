@@ -53,7 +53,10 @@
     <div id="speedo">0 u/s</div>
   </div>
 
+  <div id="killcam" class="hidden">KILLCAM &middot; <span id="killcam-name"></span></div>
+
   <div id="hud-br">
+    <div id="dash-ind" class="hidden"><b>E</b> DASH<div class="dash-bar"><div id="dash-fill"></div></div></div>
     <div id="wpn-name">ASSAULT RIFLE</div>
     <div id="ammo">
       <span id="ammo-mag">30</span><span class="slash">/</span><span id="ammo-res">90</span>
@@ -118,6 +121,7 @@
     <div class="menu-tabs">
       <button class="tab active" data-tab="play">SPIELEN</button>
       <button class="tab" data-tab="class">KLASSEN</button>
+      <button class="tab" data-tab="skins">SKINS</button>
       <button class="tab" data-tab="settings">EINSTELLUNGEN</button>
       <button class="tab" data-tab="controls">STEUERUNG</button>
     </div>
@@ -161,6 +165,18 @@
       </div>
     </div>
 
+    <div class="tabpane" id="pane-skins">
+      <div class="skin-layout">
+        <div id="skin-weapons"></div>
+        <div class="skin-center">
+          <canvas id="skin-preview"></canvas>
+          <div id="skin-caption"><b id="skin-wname">ASSAULT RIFLE</b><span id="skin-sname">Standard</span></div>
+          <p class="dim tip" style="margin-top:8px">Ziehen dreht die Waffe. Skins gelten f&uuml;r Ego- und Fremdansicht.</p>
+        </div>
+        <div id="skin-list"></div>
+      </div>
+    </div>
+
     <div class="tabpane" id="pane-settings">
       <div class="set-grid" id="settings-grid"></div>
       <button id="btn-reset-settings" class="small-btn">Auf Standard zur&uuml;cksetzen</button>
@@ -178,7 +194,9 @@
         <div><kbd>R</kbd><span>Nachladen</span></div>
         <div><kbd>1 2 3</kbd><span>Waffe wechseln (auch Mausrad)</span></div>
         <div><kbd>Q</kbd><span>Letzte Waffe</span></div>
-        <div><kbd>F</kbd><span>Nahkampf-Schlag</span></div>
+        <div><kbd>F</kbd><span>Tippen: Nahkampf-Schlag &middot; Halten: Waffe inspizieren</span></div>
+        <div><kbd>E</kbd><span>Dash (Klassen mit Dash-Perk, auch in der Luft)</span></div>
+        <div><kbd>WAND</kbd><span>Wandlauf: schr&auml;g an eine Wand springen (Agent, Ninja) &middot; Leertaste = Wandsprung</span></div>
         <div><kbd>G</kbd><span>Granate werfen</span></div>
         <div><kbd>TAB</kbd><span>Rangliste</span></div>
         <div><kbd>ESC</kbd><span>Pause / Men&uuml;</span></div>

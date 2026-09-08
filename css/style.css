@@ -215,6 +215,60 @@ label b { color: var(--accent); font-weight: 700; }
 .cd-perks span { display: inline-block; margin: 0 5px 5px 0; padding: 2px 9px; background: #202a3b; border-radius: 20px; font-size: 12px; letter-spacing: 1px; }
 
 /* ------------------------------------------------------------
+   Skins
+   ------------------------------------------------------------ */
+.skin-layout { display: grid; grid-template-columns: 210px 1fr 250px; gap: 18px; }
+@media (max-width: 900px) { .skin-layout { grid-template-columns: 1fr; } }
+#skin-weapons { display: flex; flex-direction: column; gap: 4px; max-height: 60vh; overflow-y: auto; }
+.skin-wpn {
+  display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  padding: 8px 12px; background: var(--panel-2); border: 1px solid transparent; border-radius: 8px;
+  font-family: var(--font-head); font-size: 17px; letter-spacing: 1.3px; color: var(--dim); cursor: pointer;
+  transition: all 0.12s;
+}
+.skin-wpn:hover { color: var(--text); border-color: #3d4a63; }
+.skin-wpn.sel { color: var(--accent); border-color: var(--accent); background: rgba(255,204,0,0.08); }
+.skin-wpn i { display: inline-block; width: 12px; height: 12px; border-radius: 50%; border: 1px solid rgba(255,255,255,0.25); }
+.skin-center { display: flex; flex-direction: column; align-items: center; }
+#skin-preview {
+  width: 100%; max-width: 520px; aspect-ratio: 16 / 10; display: block; cursor: grab;
+  background: radial-gradient(ellipse at 50% 60%, rgba(60,80,110,0.55) 0%, rgba(10,14,22,0.9) 70%);
+  border: 1px solid var(--stroke); border-radius: 12px;
+}
+#skin-preview:active { cursor: grabbing; }
+#skin-caption { margin-top: 10px; text-align: center; }
+#skin-caption b { display: block; font-family: var(--font-head); font-size: 26px; letter-spacing: 2.5px; color: #fff; }
+#skin-caption span { font-size: 14px; letter-spacing: 1.5px; color: var(--accent); }
+#skin-list { display: flex; flex-direction: column; gap: 6px; }
+.skin-chip {
+  display: flex; align-items: center; gap: 10px; padding: 8px 10px;
+  background: var(--panel-2); border: 2px solid transparent; border-radius: 8px; cursor: pointer; transition: all 0.12s;
+}
+.skin-chip:hover { border-color: #3d4a63; }
+.skin-chip.sel { border-color: var(--accent); background: rgba(255,204,0,0.09); }
+.skin-chip .sw { display: flex; gap: 2px; }
+.skin-chip .sw i { width: 12px; height: 26px; border-radius: 3px; display: block; }
+.skin-chip .sn { font-family: var(--font-head); font-size: 18px; letter-spacing: 1.5px; }
+.skin-chip .sd { font-size: 12px; color: var(--dim); }
+
+/* Killcam / Dash */
+#killcam {
+  position: absolute; left: 50%; top: 68px; transform: translateX(-50%);
+  padding: 6px 18px; font-family: var(--font-head); font-size: 22px; letter-spacing: 3px;
+  color: #fff; background: rgba(160,20,30,0.75); border-radius: 6px; text-shadow: 0 2px 4px #000;
+}
+#killcam span { color: var(--accent); }
+#dash-ind {
+  display: inline-block; margin-bottom: 6px; padding: 3px 10px; font-size: 12px; letter-spacing: 1.6px;
+  color: #7b8598; background: rgba(0,0,0,0.42); border-radius: 4px; text-align: left; min-width: 96px;
+}
+#dash-ind b { font-family: var(--font-head); font-size: 15px; color: #aab4c5; margin-right: 4px; }
+#dash-ind.ready { color: #fff; }
+#dash-ind.ready b { color: var(--accent); }
+#dash-ind .dash-bar { height: 3px; margin-top: 3px; background: rgba(255,255,255,0.12); border-radius: 2px; overflow: hidden; }
+#dash-ind #dash-fill { height: 100%; width: 100%; background: var(--accent); }
+
+/* ------------------------------------------------------------
    Settings
    ------------------------------------------------------------ */
 .set-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 4px 26px; }

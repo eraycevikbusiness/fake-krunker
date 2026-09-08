@@ -4,6 +4,7 @@
 // ============================================================
 
 import { Actor } from './actor.js';
+import { randomSkinId } from './skins.js';
 import { clamp, rand, randSign, angleDelta, pick, gauss } from '../core/utils.js';
 
 export const DIFFICULTY = [
@@ -67,6 +68,10 @@ export class Bot extends Actor {
     this.thinkTimer = rand(0, 0.15);
     this.preferDist = 18;
     this.intent.autoJump = false;
+
+    // Zufaellige Skins fuer die eigenen Waffen
+    this.skins = {};
+    for (const s of this.slots) this.skins[s.w.id] = randomSkinId();
   }
 
   spawn(point) {
@@ -442,6 +447,13 @@ export class Bot extends Actor {
         this.grounded && Math.hypot(this.vel.x, this.vel.z) > 9 && Math.random() < 0.004) {
       it.crouch = true;
     }
+
+    // Dash-Perk: zum Gegner schliessen oder beim Rueckzug abhauen
+    if (this.canDash && this.dashCooldown <= 0 && this.target && haveDir) {
+      const dist = Math.hypot(this.target.pos.x - this.pos.x, this.target.pos.z - this.pos.z);
+      const wants = (this.state === STATE.FIGHT && dist > this.preferDist * 1.6) || this.state === STATE.RETREAT;
+      if (wants && Math.random() < 0.02 * (0.5 + this.diff.strafeSkill)) it.dash = true;
+    }
   }
 
   // --------------------------------------------------------
@@ -458,6 +470,7 @@ export class Bot extends Actor {
     it.nade = false;
     it.melee = false;
     it.ads = false;
+    it.inspect = false;
 
     // Nachladen wenn leer oder in Ruhe
     if (s.mag !== Infinity) {

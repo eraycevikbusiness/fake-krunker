@@ -23,12 +23,15 @@ class MapBuilder {
     this.rampSteps = [];
     this.bounds = { min: -60, max: 60 };
     this.size = 120;
+    // Farbe -> Oberflaechentyp (Schrittgeraeusche): sand | stone | wood | metal | grate | dirt
+    this.surfaces = {};
   }
 
-  /** Box hinzufuegen. opts: {noCollide, emissive, noShadow} */
+  /** Box hinzufuegen. opts: {noCollide, emissive, noShadow, surface} */
   b(cx, by, cz, w, h, d, color, opts) {
     const box = { cx, by, cz, w, h, d, color };
     if (opts) Object.assign(box, opts);
+    if (!box.surface) box.surface = this.surfaces[color] || 'stone';
     this.boxes.push(box);
     return box;
   }
@@ -186,6 +189,10 @@ function buildSandstorm() {
     roof: 0xa8512c, crate: 0xc08a44, metal: 0x7d8894, cloth: 0x2a6f9e,
     stone: 0xdcd2b0, plank: 0x87582c, teal: 0x2f8f86, door: 0x3b5c8a,
   };
+  m.surfaces = {
+    [C.ground]: 'sand', [C.plank]: 'wood', [C.crate]: 'wood', [C.metal]: 'metal',
+    [C.roof]: 'wood', [C.teal]: 'metal',
+  };
 
   m.arena(120, C.ground, C.wall2, 36);
 
@@ -310,6 +317,7 @@ function buildBurg() {
     roof: 0x8a4141, wood: 0x7a5533, banner: 0x963232, bannerB: 0x32528c,
     water: 0x35708c,
   };
+  m.surfaces = { [C.ground]: 'dirt', [C.wood]: 'wood', [C.roof]: 'wood' };
 
   m.arena(112, C.ground, C.stone2, 40);
 
@@ -443,6 +451,10 @@ function buildCitadel() {
     ground: 0x323c4c, deck: 0x414d64, metal: 0x525e76, dark: 0x272f3d,
     accent: 0x00c8ff, accent2: 0xff4d6d, panel: 0x5d6b85, grate: 0x384356,
     glow: 0x2ee6a8, orange: 0xe08a2a,
+  };
+  m.surfaces = {
+    [C.deck]: 'metal', [C.metal]: 'metal', [C.dark]: 'metal', [C.panel]: 'metal',
+    [C.grate]: 'grate', [C.accent2]: 'metal', [C.orange]: 'metal',
   };
 
   m.arena(112, C.ground, C.dark, 40);

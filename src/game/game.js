@@ -1,6 +1,7 @@
 // ============================================================
 // Game: Renderer + Post-Processing, Match-Logik, Kampfsystem,
-// Projektile, Pickups
+// Projektile, Pickups, Killcam (Replay der letzten 3 Sekunden),
+// Blut-Decals, Ragdolls, Skins, Dash/Wandlauf-Callbacks
 // ============================================================
 
 import * as THREE from 'three';
@@ -14,14 +15,15 @@ import { Bot } from './bot.js';
 import { CharacterModel } from './character.js';
 import { ViewModel } from './viewmodel.js';
 import { WEAPONS, CLASSES } from './weapons.js';
+import { PHYS } from './actor.js';
 import { settings } from '../core/settings.js';
 import { audio } from '../core/audio.js';
-import { clamp, lerp, rand, pick, makeBotNames, damp, deg } from '../core/utils.js';
+import { clamp, lerp, rand, pick, makeBotNames, damp, deg, angleLerp } from '../core/utils.js';
 
 const TEAM_COLOR = { red: 0xd94a4a, blue: 0x4a86d9 };
 const TEAM_HEX = { red: '#ff6b6b', blue: '#7ab4ff' };
 const SHADOW_SIZE = { off: 0, low: 1024, high: 2048, ultra: 4096 };
-const SKINS = [0xd4a985, 0xbd8d63, 0x9a6a42, 0x6e4a2c, 0xcdb090];
+const SKINS_TONE = [0xd4a985, 0xbd8d63, 0x9a6a42, 0x6e4a2c, 0xcdb090];
 
 const STREAK_NAMES = {
   2: 'DOPPELKILL', 3: 'TRIPLE KILL', 4: 'QUAD KILL', 5: 'AMOKLAUF',
@@ -32,6 +34,10 @@ const MELEE_RAYS = [
   [0, 0], [-0.18, 0], [0.18, 0], [-0.36, -0.05], [0.36, -0.05],
   [0, -0.22], [0, 0.18], [-0.2, -0.25], [0.2, -0.25],
 ];
+
+const KILLCAM_LEN = 3.0;        // Sekunden Replay vor dem Tod
+const HIST_RATE = 1 / 60;       // Aufzeichnungsrate
+const HIST_CAP = 260;           // ~4.3 s Ringpuffer
 
 export class Game {
   constructor(canvas, hud, minimap, input) {
@@ -56,6 +62,8 @@ export class Game {
     this.jumpPads = [];
     this.pendingMelee = [];
     this.scores = { red: 0, blue: 0 };
+    this.hist = { frames: [], head: 0, count: 0, cap: HIST_CAP, lastT: -1 };
+    this.killcam = null;
 
     this._v1 = new THREE.Vector3();
     this._v2 = new THREE.Vector3();
@@ -89,12 +97,10 @@ export class Game {
     this.camera = new THREE.PerspectiveCamera(settings.fov, 1, 0.06, 900);
     this.camera.rotation.order = 'YXZ';
 
-    // Muendungslicht in der Welt (fuer den lokalen Spieler)
     this.muzzleLight = new THREE.PointLight(0xffb070, 0, 16, 2);
     this.muzzleLight.visible = false;
     this.scene.add(this.muzzleLight);
 
-    // Eigene Szene fuer die Waffenansicht
     this.vmScene = new THREE.Scene();
     this.vmCamera = new THREE.PerspectiveCamera(58, 1, 0.01, 12);
     const vmKey = new THREE.DirectionalLight(0xfff1de, 2.4);
@@ -106,6 +112,7 @@ export class Game {
     this.vmScene.add(vmKey, vmFill, vmRim, new THREE.AmbientLight(0xffffff, 0.25));
 
     this.viewmodel = new ViewModel(this.vmScene);
+    this.viewmodel.onInspectLoop = () => { if (this.player) audio.inspect(this.player.weapon.hold); };
     this.post = new PostFX(this.renderer);
 
     this.applyGraphicsSettings();
@@ -129,7 +136,6 @@ export class Game {
     if (!settings.autoQuality) this.dynScale = 1;
     this.renderer.setPixelRatio(this._pixelRatio());
 
-    // Post-Processing: Tonemapping passiert dann im Composite-Shader
     this.post.enabled = settings.postfx !== false;
     this.post.ssao = settings.ssao !== false;
     this.post.bloom = settings.bloom !== false;
@@ -175,6 +181,12 @@ export class Game {
     if (this.minimap) this.minimap.zoom = 1;
   }
 
+  /** Skin-Id fuer eine Waffe eines Akteurs */
+  skinFor(actor, weapon) {
+    const w = weapon || actor.weapon;
+    return (actor.skins && actor.skins[w.id]) || 'default';
+  }
+
   // --------------------------------------------------------
   // Match aufsetzen
   // --------------------------------------------------------
@@ -192,6 +204,8 @@ export class Game {
     this.scores.blue = 0;
     this._lastCountdown = 0;
     this.pendingClassId = null;
+    this.hist = { frames: [], head: 0, count: 0, cap: HIST_CAP, lastT: -1 };
+    this.killcam = null;
 
     const mapDef = buildMap(cfg.map || 'sandstorm');
     this.world = new World(this.scene, mapDef, this.renderer);
@@ -213,6 +227,7 @@ export class Game {
       classId: cfg.classId || 'triggerman',
     });
     this.player.thirdPerson = settings.thirdPerson;
+    this.player.skins = cfg.skins || {};
     this.player.model = this._makeModel(this.player);
     this.actors = [this.player];
 
@@ -235,13 +250,14 @@ export class Game {
 
     for (const a of this.actors) this.respawn(a, true);
 
-    this.viewmodel.setWeapon(this.player.weapon, this.player.skin);
+    this.viewmodel.setWeapon(this.player.weapon, this.player.skin, this.skinFor(this.player));
     this.player.applyCamera(this.camera, this.world, 0.016);
     this.camera.updateMatrixWorld();
 
     this.hud.clearFloating();
     this.hud.show(true);
     this.hud.hideDeath();
+    this.hud.setKillcam(null);
     this.hud.setMinimapVisible(settings.showMinimap);
     this.running = true;
     this.paused = false;
@@ -284,14 +300,16 @@ export class Game {
   _makeModel(actor) {
     const isTeam = this.mode !== 'ffa';
     const color = isTeam ? TEAM_COLOR[actor.team] : this._ffaColor(actor);
-    actor.skin = pick(SKINS);
+    actor.skin = pick(SKINS_TONE);
     const m = new CharacterModel(this.scene, {
       color,
       accent: isTeam ? (actor.team === 'red' ? 0xffb0b0 : 0xb0d0ff) : 0xffffff,
       pants: 0x2a3040,
       skin: actor.skin,
+      world: this.world,
+      effects: this.effects,
     });
-    m.setWeapon(actor.weapon);
+    m.setWeapon(actor.weapon, this.skinFor(actor));
     return m;
   }
 
@@ -328,6 +346,8 @@ export class Game {
 
   cleanup() {
     this.running = false;
+    this.killcam = null;
+    if (this.hud) this.hud.setKillcam(null);
     for (const a of this.actors || []) if (a.model) a.model.dispose();
     this.actors = [];
     for (const p of this.projectiles || []) if (p.mesh) { this.scene.remove(p.mesh); p.mesh.material.dispose(); }
@@ -377,6 +397,7 @@ export class Game {
       actor.setClass(this.pendingClassId);
       this.pendingClassId = null;
     }
+    if (actor.isLocal) this.endKillcam();
 
     const points = this.spawnPointsFor(actor);
     let best = points[0], bestScore = -Infinity;
@@ -414,8 +435,8 @@ export class Game {
     }
     actor.spawn({ x: sx, y: sy, z: sz, yaw: best.yaw });
     if (actor.model) {
-      actor.model.setWeapon(actor.weapon);
       actor.model.resetDeath();
+      actor.model.setWeapon(actor.weapon, this.skinFor(actor));
       actor.model.setVisible(true);
     }
     if (this.effects) {
@@ -424,7 +445,7 @@ export class Game {
     }
     if (actor.isLocal) {
       this.hud.hideDeath();
-      this.viewmodel.setWeapon(actor.weapon, actor.skin);
+      this.viewmodel.setWeapon(actor.weapon, actor.skin, this.skinFor(actor));
       this.viewmodel.setHidden(false);
       if (!initial) { audio.tone(540, 0.09, 0.2, 'sine'); audio.draw(null, actor.weapon.hold); }
     }
@@ -434,7 +455,7 @@ export class Game {
   // Waffenwirkung
   // --------------------------------------------------------
   muzzleWorld(actor, out) {
-    if (actor.isLocal && !actor.thirdPerson && !settings.thirdPerson) {
+    if (actor.isLocal && !actor.thirdPerson && !settings.thirdPerson && !this.killcam) {
       this.viewmodel.muzzleLocal(out);
       const e = this._camE || (this._camE = new THREE.Euler(0, 0, 0, 'YXZ'));
       const q = this._camQ || (this._camQ = new THREE.Quaternion());
@@ -473,6 +494,7 @@ export class Game {
       return;
     }
 
+    actor.lastShotTime = this.time;
     audio.shot(soundPos, w.sound);
 
     if (actor.isLocal) {
@@ -482,7 +504,6 @@ export class Game {
         deg(w.recoilH) * rand(-1, 1)
       );
       actor.addShake(w.kick * 1.4);
-      // Muendungslicht in der Welt
       this.muzzleLight.position.copy(this._muzzle);
       this.muzzleLight.visible = true;
       this.muzzleLightT = 1;
@@ -509,14 +530,17 @@ export class Game {
 
     const spread = actor.currentSpread();
     const pellets = w.pellets || 1;
-    let anyHit = false, anyKill = false, anyHead = false;
+    let anyHit = false, anyKill = false, anyHead = false, hitDist = 0;
     const acc = this._dmgAcc;
     acc.clear();
 
     for (let i = 0; i < pellets; i++) {
       const d = this._spreadDir(dir, spread, this._v3);
       const r = this._hitscan(actor, eye, d, w, acc);
-      if (r.actorHit) { anyHit = true; if (r.head) anyHead = true; if (r.killed) anyKill = true; }
+      if (r.actorHit) {
+        anyHit = true; if (r.head) anyHead = true; if (r.killed) anyKill = true;
+        hitDist = Math.hypot(r.x - eye.x, r.y - eye.y, r.z - eye.z);
+      }
       if (this.effects && (pellets === 1 || i % 2 === 0)) {
         this.effects.tracer(
           this._muzzle.x, this._muzzle.y, this._muzzle.z,
@@ -531,7 +555,7 @@ export class Game {
       });
       if (anyHit) {
         this.hud.hitmarker(anyKill ? 'kill' : anyHead ? 'head' : 'hit');
-        audio.hitmarker(anyHead, anyKill);
+        audio.hitmarker(anyHead, anyKill, hitDist);
         this._hitTint = 0.14;
       }
     }
@@ -552,6 +576,18 @@ export class Game {
       out.normalize();
     }
     return out;
+  }
+
+  /** Blutspritzer hinter dem Getroffenen (Wand) und darunter (Boden) */
+  _bloodOnWorld(hx, hy, hz, dx, dy, dz, dmg, big) {
+    if (!this.effects || !settings.blood) return;
+    const size = (big ? 0.7 : 0.4) + Math.min(1.3, dmg / 55);
+    const wh = this.world.raycast(hx, hy, hz, dx, dy, dz, big ? 9 : 6);
+    if (wh) this.effects.bloodSplat(wh.x, wh.y, wh.z, wh.nx, wh.ny, wh.nz, size * clamp(1.3 - wh.t / 9, 0.5, 1.2));
+    if (big || Math.random() < 0.55) {
+      const fh = this.world.raycast(hx + dx * 0.4, hy, hz + dz * 0.4, 0, -1, 0, 3.5);
+      if (fh) this.effects.bloodSplat(fh.x, fh.y, fh.z, fh.nx, fh.ny, fh.nz, size * 0.75);
+    }
   }
 
   _hitscan(shooter, eye, dir, w, acc) {
@@ -603,6 +639,7 @@ export class Game {
         }
 
         if (this.effects) this.effects.blood(hx, hy, hz, dir.x, dir.y, dir.z, head);
+        this._bloodOnWorld(hx, hy, hz, dir.x, dir.y, dir.z, dmg, head || (res && res.killed));
         audio.flesh({ x: hx, y: hy, z: hz });
 
         ignored.add(bestActor);
@@ -715,7 +752,7 @@ export class Game {
       if (head && !back) dmg *= (w.headMult || 1);
       const res = this.damageActor(hit, actor, dmg, w.id, {
         x: hx.x, y: hx.y, z: hx.z,
-        dirx: dir.x, diry: dir.y, dirz: dir.z, head,
+        dirx: dir.x, diry: dir.y, dirz: dir.z, head, strength: heavy ? 12 : 8,
       });
       const kb = (w.knockback || 4) * (heavy ? 1.6 : 1);
       if (hit.alive) {
@@ -729,10 +766,11 @@ export class Game {
         this.effects.blood(hx.x, hx.y, hx.z, dir.x, dir.y, dir.z, true);
         if (heavy) this.effects.blood(hx.x, hx.y, hx.z, dir.x, dir.y + 0.4, dir.z, true);
       }
+      this._bloodOnWorld(hx.x, hx.y, hx.z, dir.x, dir.y, dir.z, dmg, true);
       audio.meleeHit(actor.isLocal ? null : { x: hx.x, y: hx.y, z: hx.z }, kind, heavy);
       if (actor.isLocal) {
         this.hud.hitmarker(res && res.killed ? 'kill' : (back || head) ? 'head' : 'hit');
-        audio.hitmarker(back || head, res && res.killed);
+        audio.hitmarker(back || head, res && res.killed, bestD);
         actor.addShake(heavy ? 0.5 : 0.25);
         this.viewmodel.hitKick(heavy);
         this._hitTint = 0.16;
@@ -923,7 +961,6 @@ export class Game {
   explode(x, y, z, ex, owner, weapon, directActor) {
     if (this.effects) this.effects.explosion(x, y, z, ex.radius * 0.55);
     audio.explosion({ x, y, z });
-    // Explosionslicht
     this.muzzleLight.position.set(x, y + 0.5, z);
     this.muzzleLight.visible = true;
     this.muzzleLightT = 2.2;
@@ -955,6 +992,7 @@ export class Game {
 
       this.damageActor(a, owner, dmg, weapon ? weapon.id : 'explosion', {
         x: cx, y: cy, z: cz, dirx: (cx - x) / l, diry: (cy - y) / l, dirz: (cz - z) / l, head: false,
+        strength: 8 + push * 0.6,
       });
     }
 
@@ -985,7 +1023,6 @@ export class Game {
     victim.lastDamageCause = causeId;
     if (attacker && attacker !== victim) attacker.damageDealt += actualDmg;
 
-    // Treffer-Flash am Modell
     if (victim.model && !victim.isLocal) victim.model.flash(died ? 1.2 : clamp(0.35 + actualDmg / 60, 0.35, 0.9), died);
 
     if (attacker === this.player && victim !== this.player && hit && !hit.noPopup) {
@@ -1016,23 +1053,41 @@ export class Game {
     return { killed: died, damage: actualDmg };
   }
 
+  /** Ragdoll-Startdaten fuer das Modell */
+  _ragdollInfo(victim, hit) {
+    return {
+      s: { x: victim.pos.x, y: victim.pos.y, z: victim.pos.z, yaw: victim.yaw, vx: victim.vel.x, vy: victim.vel.y, vz: victim.vel.z },
+      hit: { dirx: hit ? hit.dirx : 0, diry: hit ? hit.diry : 0.3, dirz: hit ? hit.dirz : 1, head: !!(hit && hit.head), strength: (hit && hit.strength) || 8 },
+    };
+  }
+
   handleKill(victim, attacker, causeId, hit) {
     victim.alive = false;
     victim.hp = 0;
     victim.deaths++;
     victim.streak = 0;
-    victim.respawnTimer = victim.isLocal ? 3.2 : rand(2.2, 4.5);
     victim.intent.fire = false;
     victim.sliding = false;
+    victim.wallrun = null;
     if (victim.onDeath) victim.onDeath(attacker);
 
-    if (victim.model) victim.model.startDeath(hit ? hit.dirx : 0, hit ? hit.dirz : 1);
+    const suicide = !attacker || attacker === victim;
+    let killcam = false;
+    if (victim.isLocal && !suicide && settings.killcam) killcam = this.startKillcam(attacker);
+    victim.respawnTimer = victim.isLocal ? (killcam ? KILLCAM_LEN + 0.9 : 3.2) : rand(2.2, 4.5);
+
+    if (victim.model) {
+      const info = this._ragdollInfo(victim, hit);
+      if (killcam) this.killcam.pendingRagdoll = info;      // erst nach dem Replay umfallen
+      else if (settings.ragdolls) victim.model.startRagdoll(info.s, info.hit);
+      else victim.model.startDeath(info.hit.dirx, info.hit.dirz);
+    }
     audio.death({ x: victim.pos.x, y: victim.pos.y + 1.4, z: victim.pos.z });
+    if (hit) this._bloodOnWorld(hit.x, hit.y, hit.z, hit.dirx, hit.diry, hit.dirz, 90, true);
 
     const w = WEAPONS[causeId];
     const wName = w ? w.short : causeId === 'fall' ? 'STURZ' : causeId === 'void' ? 'ABGRUND'
                  : causeId === 'melee' ? 'MELEE' : 'EXPLOSION';
-    const suicide = !attacker || attacker === victim;
 
     if (!suicide) {
       attacker.kills++;
@@ -1066,8 +1121,7 @@ export class Game {
 
     if (victim.isLocal) {
       this.hud.showDeath(this._deathInfo.name, this._deathInfo.weapon, this._deathInfo.hp, victim.respawnTimer);
-      this.viewmodel.setHidden(true);
-      this.hud.setScope(false);
+      if (!killcam) { this.viewmodel.setHidden(true); this.hud.setScope(false); }
     }
 
     this._checkMatchEnd();
@@ -1089,6 +1143,7 @@ export class Game {
     if (this.over) return;
     this.over = true;
     this.running = false;
+    this.endKillcam();
     this.viewmodel.setHidden(true);
     this.hud.setScope(false);
     this.input.exitLock();
@@ -1103,6 +1158,141 @@ export class Game {
     }
     if (won) audio.win(); else audio.lose();
     if (this.onMatchEnd) this.onMatchEnd(winner, won);
+  }
+
+  // --------------------------------------------------------
+  // Killcam: Aufzeichnung + Wiedergabe
+  // --------------------------------------------------------
+  _recordHistory() {
+    const h = this.hist;
+    if (this.time - h.lastT < HIST_RATE) return;
+    h.lastT = this.time;
+    const f = h.frames[h.head] || (h.frames[h.head] = { t: 0, s: [] });
+    f.t = this.time;
+    const n = this.actors.length;
+    for (let i = 0; i < n; i++) {
+      const a = this.actors[i];
+      const st = f.s[i] || (f.s[i] = {});
+      st.x = a.pos.x; st.y = a.pos.y; st.z = a.pos.z;
+      st.yaw = a.yaw; st.pitch = a.pitch;
+      st.alive = a.alive; st.crouch = a.crouching || a.sliding;
+      st.wid = a.weapon.id;
+      st.shot = (this.time - (a.lastShotTime !== undefined ? a.lastShotTime : -9)) < HIST_RATE + 1e-4;
+      st.speed = Math.hypot(a.vel.x, a.vel.z); st.grounded = a.grounded;
+    }
+    f.s.length = n;
+    h.head = (h.head + 1) % h.cap;
+    if (h.count < h.cap) h.count++;
+  }
+
+  startKillcam(killer) {
+    const h = this.hist;
+    const t1 = this.time, t0 = t1 - KILLCAM_LEN;
+    const frames = [];
+    for (let k = 0; k < h.count; k++) {
+      const idx = (h.head - h.count + k + h.cap) % h.cap;
+      const f = h.frames[idx];
+      if (!f || f.t < t0 - 0.05) continue;
+      frames.push({ t: f.t, s: f.s.map(st => Object.assign({}, st)) });
+    }
+    if (frames.length < 6) return false;
+    const killerIdx = this.actors.indexOf(killer);
+    if (killerIdx < 0) return false;
+    this.killcam = {
+      killer, killerIdx, frames, t0: frames[0].t, t1, play: 0, fi: 0, lastFrame: -1,
+      wid: null, cur: frames[0].s.map(st => Object.assign({}, st)), frozen: false, pendingRagdoll: null,
+    };
+    this.hud.setKillcam(killer.name);
+    this.hud.setScope(false);
+    this.viewmodel.setHidden(false);
+    return true;
+  }
+
+  endKillcam() {
+    if (!this.killcam) return;
+    const kc = this.killcam;
+    this.killcam = null;
+    this.hud.setKillcam(null);
+    for (const a of this.actors) if (a.model && a.alive) a.model.setWeapon(a.weapon, this.skinFor(a));
+    if (kc.pendingRagdoll && this.player.model && !this.player.alive) {
+      if (settings.ragdolls) this.player.model.startRagdoll(kc.pendingRagdoll.s, kc.pendingRagdoll.hit);
+      else this.player.model.startDeath(kc.pendingRagdoll.hit.dirx, kc.pendingRagdoll.hit.dirz);
+    }
+  }
+
+  /** Replay-Zustand fuer die aktuelle Wiedergabezeit interpolieren */
+  _killcamUpdate(dt) {
+    const kc = this.killcam;
+    kc.play += dt;
+    const tr = kc.t0 + kc.play;
+    const fr = kc.frames;
+    let i = kc.fi;
+    while (i < fr.length - 2 && fr[i + 1].t <= tr) i++;
+    kc.fi = i;
+    const a = fr[i], b = fr[Math.min(i + 1, fr.length - 1)];
+    let k = b.t > a.t ? clamp((tr - a.t) / (b.t - a.t), 0, 1) : 1;
+    const frozen = tr >= fr[fr.length - 1].t;
+    if (frozen) k = 1;
+    for (let j = 0; j < kc.cur.length; j++) {
+      const sa = a.s[j], sb = b.s[j] || sa, c = kc.cur[j];
+      if (!sa) continue;
+      c.x = lerp(sa.x, sb.x, k); c.y = lerp(sa.y, sb.y, k); c.z = lerp(sa.z, sb.z, k);
+      c.yaw = angleLerp(sa.yaw, sb.yaw, k); c.pitch = lerp(sa.pitch, sb.pitch, k);
+      c.alive = k < 0.5 ? sa.alive : sb.alive; c.crouch = sa.crouch; c.wid = sa.wid;
+      c.speed = lerp(sa.speed, sb.speed, k); c.grounded = sa.grounded;
+    }
+    // Schuesse der uebersprungenen Frames abspielen
+    const upto = frozen ? fr.length - 1 : i;
+    for (let j = kc.lastFrame + 1; j <= upto; j++) {
+      const f = fr[j];
+      for (let n = 0; n < f.s.length; n++) {
+        if (!f.s[n] || !f.s[n].shot) continue;
+        const actor = this.actors[n];
+        const w = WEAPONS[f.s[n].wid] || actor.weapon;
+        if (n === kc.killerIdx) {
+          this.viewmodel.fire(1);
+          audio.shot(null, w.sound);
+          this.muzzleLight.position.set(f.s[n].x, f.s[n].y + PHYS.EYE, f.s[n].z);
+          this.muzzleLight.visible = true;
+          this.muzzleLightT = 1;
+        } else if (actor && actor.model && this.effects) {
+          audio.shot({ x: f.s[n].x, y: f.s[n].y + 1.6, z: f.s[n].z }, w.sound);
+          actor.model.getMuzzleWorld(this._v3);
+          const cp = Math.cos(f.s[n].pitch);
+          this.effects.muzzleFlash(this._v3.x, this._v3.y, this._v3.z, -Math.sin(f.s[n].yaw) * cp, Math.sin(f.s[n].pitch), -Math.cos(f.s[n].yaw) * cp, 0.7);
+        }
+      }
+    }
+    kc.lastFrame = upto;
+
+    // Kamera aus den Augen des Killers
+    const ks = kc.cur[kc.killerIdx];
+    const eye = ks.crouch ? PHYS.CROUCH_EYE : PHYS.EYE;
+    this.camera.position.set(ks.x, ks.y + eye, ks.z);
+    this.camera.rotation.order = 'YXZ';
+    this.camera.rotation.set(ks.pitch, ks.yaw, 0);
+
+    // Waffe des Killers in der Egoansicht
+    if (kc.wid !== ks.wid) {
+      kc.wid = ks.wid;
+      const w = WEAPONS[ks.wid] || kc.killer.weapon;
+      this.viewmodel.setWeapon(w, kc.killer.skin, this.skinFor(kc.killer, w));
+      this.viewmodel.setHidden(false);
+    }
+    this.viewmodel.update(dt, {
+      adsTarget: false, moveSpeed: ks.speed, grounded: ks.grounded, sprint: false, slide: false,
+      crouch: ks.crouch, firing: false, lookDX: 0, lookDY: 0, velY: 0, landImpact: 0,
+    });
+
+    if (frozen && !kc.frozen) {
+      kc.frozen = true;
+      if (kc.pendingRagdoll && this.player.model) {
+        if (settings.ragdolls) this.player.model.startRagdoll(kc.pendingRagdoll.s, kc.pendingRagdoll.hit);
+        else this.player.model.startDeath(kc.pendingRagdoll.hit.dirx, kc.pendingRagdoll.hit.dirz);
+        kc.pendingRagdoll = null;
+      }
+    }
+    return frozen;
   }
 
   // --------------------------------------------------------
@@ -1164,20 +1354,28 @@ export class Game {
     audio.click(a.isLocal ? null : { x: a.pos.x, y: a.pos.y + 1, z: a.pos.z }, 700, 0.22, 0.09);
     if (this.effects) this.effects.dust(a.pos.x, a.pos.y, a.pos.z, 0.5);
   }
-  onLand(a, impact) {
+  onLand(a, impact, surface) {
     if (impact < 4) return;
-    audio.land(a.isLocal ? null : { x: a.pos.x, y: a.pos.y, z: a.pos.z }, impact > 18);
+    audio.land(a.isLocal ? null : { x: a.pos.x, y: a.pos.y, z: a.pos.z }, impact > 18, surface);
     if (this.effects && impact > 10) this.effects.dust(a.pos.x, a.pos.y, a.pos.z, clamp(impact / 24, 0.2, 1.2));
     if (a.isLocal && impact > 16) a.addShake(clamp(impact / 60, 0, 0.5));
   }
-  onFootstep(a, speed) {
+  onFootstep(a, speed, surface) {
     const quiet = a.classDef && a.classDef.id === 'ninja';
-    audio.step(a.isLocal ? null : { x: a.pos.x, y: a.pos.y, z: a.pos.z }, (quiet ? 0.35 : 1) * clamp(speed / 11, 0.4, 1.2));
+    audio.step(a.isLocal ? null : { x: a.pos.x, y: a.pos.y, z: a.pos.z }, (quiet ? 0.35 : 1) * clamp(speed / 11, 0.4, 1.2), surface);
     if (!a.isLocal && !quiet) a.lastLoudTime = this.time - 0.6;
   }
   onSlide(a) {
-    audio.land(a.isLocal ? null : { x: a.pos.x, y: a.pos.y, z: a.pos.z }, false);
+    audio.land(a.isLocal ? null : { x: a.pos.x, y: a.pos.y, z: a.pos.z }, false, a.surface);
     if (this.effects) this.effects.dust(a.pos.x, a.pos.y, a.pos.z, 0.8);
+  }
+  onDash(a) {
+    audio.dash(a.isLocal ? null : { x: a.pos.x, y: a.pos.y + 1, z: a.pos.z });
+    if (this.effects) this.effects.dust(a.pos.x, a.pos.y, a.pos.z, 0.9);
+    if (a.isLocal) { this.viewmodel.dash(); a.addShake(0.12); }
+  }
+  onWallrunStart(a) {
+    audio.wallrun(a.isLocal ? null : { x: a.pos.x, y: a.pos.y + 1, z: a.pos.z });
   }
   onJumpPad(a) {
     audio.tone(420, 0.2, 0.3, 'sine', null, 1200);
@@ -1197,8 +1395,8 @@ export class Game {
   onReloadEnd(a) { audio.reloadStep(a.isLocal ? null : { x: a.pos.x, y: a.pos.y + 1.4, z: a.pos.z }, 1); }
   onReloadCancel(a) { if (a.isLocal) this.viewmodel.cancelReload(); }
   onWeaponSwitch(a) {
-    if (a.isLocal) { this.viewmodel.setWeapon(a.weapon, a.skin); this.viewmodel.setHidden(false); }
-    if (a.model) a.model.setWeapon(a.weapon);
+    if (a.isLocal && !this.killcam) { this.viewmodel.setWeapon(a.weapon, a.skin, this.skinFor(a)); this.viewmodel.setHidden(false); }
+    if (a.model && !this.killcam) a.model.setWeapon(a.weapon, this.skinFor(a));
     audio.draw(a.isLocal ? null : { x: a.pos.x, y: a.pos.y + 1.4, z: a.pos.z }, a.weapon.hold);
     if (a.isBot) a._updatePreferredRange();
   }
@@ -1234,6 +1432,7 @@ export class Game {
     this._updatePendingMelee(dt);
     this.updateProjectiles(dt);
     this.updatePickups(dt);
+    this._recordHistory();
 
     if (!this.over) {
       this.timeLeft -= dt;
@@ -1254,41 +1453,51 @@ export class Game {
   postUpdate(dt) {
     if (!this.world) return;
     this.frameDt = dt;
-
-    this.player.applyCamera(this.camera, this.world, dt);
-    const fov = this.player.alive ? this.player.targetFov() : settings.fov;
-    if (Math.abs(this.camera.fov - fov) > 0.01) {
-      this.camera.fov = damp(this.camera.fov, fov, 22, dt);
-      this.camera.updateProjectionMatrix();
-    }
-    this.camera.updateMatrixWorld();
-
-    this._updateModels(dt);
-
     const p = this.player;
-    const w = p.weapon;
-    const scoped = w.scope && p.adsAmount > 0.72 && p.alive;
-    this.viewmodel.setHidden(!p.alive || scoped || (p.thirdPerson || settings.thirdPerson));
-    this.hud.setScope(scoped);
-    if (!this.viewmodel.hidden) {
-      this.viewmodel.update(dt, {
-        adsTarget: p.ads,
-        moveSpeed: Math.hypot(p.vel.x, p.vel.z),
-        grounded: p.grounded,
-        sprint: p.sprinting,
-        slide: p.sliding,
-        crouch: p.crouching,
-        firing: p.intent.fire,
-        lookDX: p.lookDX,
-        lookDY: p.lookDY,
-        velY: p.vel.y,
-        landImpact: p.landImpact > 0.35 ? p.landImpact * 0.4 : 0,
-      });
+
+    if (this.killcam) {
+      // Replay aus den Augen des Killers
+      this._killcamUpdate(dt);
+      const fov = settings.fov;
+      if (Math.abs(this.camera.fov - fov) > 0.01) { this.camera.fov = damp(this.camera.fov, fov, 22, dt); this.camera.updateProjectionMatrix(); }
+      this.camera.updateMatrixWorld();
+      this._updateModels(dt, this.killcam.cur);
+      this.hud.setScope(false);
+    } else {
+      p.applyCamera(this.camera, this.world, dt);
+      const fov = p.alive ? p.targetFov() : settings.fov;
+      if (Math.abs(this.camera.fov - fov) > 0.01) {
+        this.camera.fov = damp(this.camera.fov, fov, 22, dt);
+        this.camera.updateProjectionMatrix();
+      }
+      this.camera.updateMatrixWorld();
+
+      this._updateModels(dt, null);
+
+      const w = p.weapon;
+      const scoped = w.scope && p.adsAmount > 0.72 && p.alive;
+      this.viewmodel.setHidden(!p.alive || scoped || (p.thirdPerson || settings.thirdPerson));
+      this.hud.setScope(scoped);
+      if (!this.viewmodel.hidden) {
+        this.viewmodel.setInspect(p.intent.inspect && p.alive);
+        this.viewmodel.update(dt, {
+          adsTarget: p.ads,
+          moveSpeed: Math.hypot(p.vel.x, p.vel.z),
+          grounded: p.grounded,
+          sprint: p.sprinting,
+          slide: p.sliding,
+          crouch: p.crouching,
+          firing: p.intent.fire,
+          lookDX: p.lookDX,
+          lookDY: p.lookDY,
+          velY: p.vel.y,
+          landImpact: p.landImpact > 0.35 ? p.landImpact * 0.4 : 0,
+        });
+      }
     }
 
     if (this.effects) this.effects.update(dt, this.camera);
 
-    // Muendungs-/Explosionslicht abklingen
     if (this.muzzleLightT > 0) {
       this.muzzleLightT = Math.max(0, this.muzzleLightT - dt / 0.07);
       this.muzzleLight.intensity = 55 * Math.min(1, this.muzzleLightT);
@@ -1298,8 +1507,9 @@ export class Game {
 
     if (this.sun && this.sun.castShadow) {
       const d = this.world.map.sunDir;
-      this.sun.position.set(p.pos.x + d[0] * 110, p.pos.y + d[1] * 110, p.pos.z + d[2] * 110);
-      this.sun.target.position.set(p.pos.x, p.pos.y, p.pos.z);
+      const cx = this.camera.position.x, cy = this.camera.position.y, cz = this.camera.position.z;
+      this.sun.position.set(cx + d[0] * 110, cy + d[1] * 110, cz + d[2] * 110);
+      this.sun.target.position.set(cx, cy, cz);
       this.sun.target.updateMatrixWorld();
     }
 
@@ -1310,15 +1520,48 @@ export class Game {
     this._updateHud(dt);
   }
 
-  _updateModels(dt) {
+  /** replay: Array interpolierter Zustaende (Killcam) oder null fuer Live */
+  _updateModels(dt, replay) {
     const camPos = this.camera.position;
-    for (const a of this.actors) {
+    const kc = this.killcam;
+    for (let i = 0; i < this.actors.length; i++) {
+      const a = this.actors[i];
       if (!a.model) continue;
-      const firstPerson = a.isLocal && !(a.thirdPerson || settings.thirdPerson) && a.alive;
-      const faded = !a.alive && a.model.deathT > 4.2;
-      if (firstPerson || faded) { a.model.setVisible(false); continue; }
+      const st = replay ? replay[i] : null;
+      let hidden;
+      if (st) {
+        hidden = i === kc.killerIdx;
+      } else {
+        const firstPerson = a.isLocal && !(a.thirdPerson || settings.thirdPerson) && a.alive;
+        const faded = !a.alive && a.model.deathT > 4.2;
+        hidden = firstPerson || faded;
+      }
+      if (hidden) { a.model.setVisible(false); continue; }
       a.model.setVisible(true);
 
+      if (st) {
+        // Im Replay: Waffe der aufgezeichneten Zeit zeigen
+        if (a.model.currentWeapon && a.model.currentWeapon.id !== st.wid && WEAPONS[st.wid]) {
+          a.model.setWeapon(WEAPONS[st.wid], this.skinFor(a, WEAPONS[st.wid]));
+        }
+        const victim = a.isLocal;
+        a.model.update(dt, {
+          x: st.x, y: st.y, z: st.z, yaw: st.yaw, pitch: st.pitch,
+          speed: st.speed, grounded: st.grounded, crouch: st.crouch, slide: false, wallrun: 0,
+          dead: victim ? (kc.frozen) : !a.alive,
+          name: a.name, hp: a.hp, maxHp: a.maxHp,
+          enemy: !this.sameTeam(a, this.player),
+          tagColor: this.mode === 'ffa' ? '#ffffff' : (a.team === 'red' ? TEAM_HEX.red : TEAM_HEX.blue),
+          showTag: !victim && a.alive,
+        }, camPos);
+        continue;
+      }
+
+      let wallSide = 0;
+      if (a.wallrun) {
+        const rx = Math.cos(a.yaw), rz = -Math.sin(a.yaw);
+        wallSide = a.wallrun.nx * rx + a.wallrun.nz * rz;
+      }
       a.model.update(dt, {
         x: a.pos.x, y: a.pos.y, z: a.pos.z,
         yaw: a.yaw, pitch: a.pitch,
@@ -1326,6 +1569,7 @@ export class Game {
         grounded: a.grounded,
         crouch: a.crouching || a.sliding,
         slide: a.sliding,
+        wallrun: wallSide,
         dead: !a.alive,
         name: a.name,
         hp: a.hp, maxHp: a.maxHp,
@@ -1341,6 +1585,7 @@ export class Game {
     this.hud.updateStatus(p, dt);
     this.hud.updateWeapon(p);
     this.hud.updateStats(p);
+    this.hud.updateDash(p, PHYS.DASH_COOLDOWN);
     this.hud.updateMatch(this.mode, this.scores.red, this.scores.blue, this.timeLeft);
     if (!p.alive) this.hud.updateDeathTimer(p.respawnTimer);
 
@@ -1349,7 +1594,7 @@ export class Game {
       ? Math.tan(spread) / Math.tan(deg(this.camera.fov) / 2) * (window.innerHeight / 2)
       : 0;
     const scoped = p.weapon.scope && p.adsAmount > 0.72;
-    this.hud.updateCrosshair(clamp(px, 0, 90), !p.alive || scoped, this._hitTint > 0);
+    this.hud.updateCrosshair(clamp(px, 0, 90), !p.alive || scoped || !!this.killcam, this._hitTint > 0);
 
     this.hud.updateFloating(dt, this.camera);
 

@@ -226,10 +226,56 @@ function makeFlashTexture() {
   return t;
 }
 
+/** Blutspritzer: mehrere dunkelrote Flecken mit Tropfen */
+function makeBloodTexture(seed) {
+  const S = 128;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = S;
+  const g = cv.getContext('2d');
+  g.clearRect(0, 0, S, S);
+  let s = seed || 7;
+  const rnd = () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
+  const blobs = [];
+  for (let i = 0; i < 16; i++) {
+    const a = rnd() * Math.PI * 2;
+    const d = rnd() * rnd() * S * 0.34;
+    const x = S / 2 + Math.cos(a) * d, y = S / 2 + Math.sin(a) * d;
+    const r = (5 + rnd() * 15) * (1.1 - d / (S * 0.4));
+    blobs.push([x, y, r]);
+    const grd = g.createRadialGradient(x, y, 0, x, y, r);
+    grd.addColorStop(0, 'rgba(110,6,10,0.96)');
+    grd.addColorStop(0.55, 'rgba(96,4,8,0.85)');
+    grd.addColorStop(1, 'rgba(70,2,6,0)');
+    g.fillStyle = grd;
+    g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill();
+  }
+  // Tropfen nach unten
+  g.strokeStyle = 'rgba(96,4,8,0.8)';
+  g.lineCap = 'round';
+  for (let i = 0; i < 7; i++) {
+    const b = blobs[(rnd() * blobs.length) | 0];
+    g.lineWidth = 1.5 + rnd() * 2.5;
+    g.beginPath();
+    g.moveTo(b[0], b[1]);
+    g.lineTo(b[0] + (rnd() - 0.5) * 4, Math.min(S - 2, b[1] + b[2] + 6 + rnd() * 26));
+    g.stroke();
+  }
+  // Feine Spritzer
+  g.fillStyle = 'rgba(120,8,12,0.9)';
+  for (let i = 0; i < 40; i++) {
+    const a = rnd() * Math.PI * 2, d = S * 0.2 + rnd() * S * 0.28;
+    g.beginPath(); g.arc(S / 2 + Math.cos(a) * d, S / 2 + Math.sin(a) * d, 0.6 + rnd() * 1.6, 0, Math.PI * 2); g.fill();
+  }
+  const t = new THREE.CanvasTexture(cv);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
 // ------------------------------------------------------------
 // Effekt-Manager
 // ------------------------------------------------------------
 const MAX_DECALS = 90;
+const MAX_BLOOD = 64;
 const MAX_TRACERS = 80;
 
 export class Effects {
@@ -258,6 +304,24 @@ export class Effects {
       m.renderOrder = 5;
       this.decalGroup.add(m);
       this.decals.push({ mesh: m, life: 0 });
+    }
+
+    // ---- Blut-Decals (an Waenden und am Boden) ----
+    this.bloodTex = [makeBloodTexture(7), makeBloodTexture(23), makeBloodTexture(91)];
+    this.bloods = [];
+    this.bloodIdx = 0;
+    this.bloodGroup = new THREE.Group();
+    scene.add(this.bloodGroup);
+    for (let i = 0; i < MAX_BLOOD; i++) {
+      const mat = new THREE.MeshBasicMaterial({
+        map: this.bloodTex[i % 3], transparent: true, depthWrite: false,
+        polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3, opacity: 1,
+      });
+      const m = new THREE.Mesh(this.decalGeo, mat);
+      m.visible = false;
+      m.renderOrder = 6;
+      this.bloodGroup.add(m);
+      this.bloods.push({ mesh: m, life: 0, max: 1 });
     }
 
     // ---- Tracer ----
@@ -384,6 +448,22 @@ export class Effects {
     m.scale.setScalar(size);
     m.material.opacity = 1;
     d.life = 22;
+  }
+
+  /** Blutspritzer auf einer Flaeche (Normale n), size in Welteinheiten */
+  bloodSplat(x, y, z, nx, ny, nz, size) {
+    if (!settings.blood) return;
+    const d = this.bloods[this.bloodIdx];
+    this.bloodIdx = (this.bloodIdx + 1) % this.bloods.length;
+    const m = d.mesh;
+    m.visible = true;
+    m.position.set(x + nx * 0.015, y + ny * 0.015, z + nz * 0.015);
+    this._v.set(nx, ny, nz);
+    m.quaternion.setFromUnitVectors(this._fwd, this._v);
+    m.rotateZ(Math.random() * Math.PI * 2);
+    m.scale.set(size * rand(0.85, 1.25), size * rand(0.85, 1.25), 1);
+    m.material.opacity = 0.95;
+    d.life = d.max = 40;
   }
 
   muzzleFlash(x, y, z, dirx, diry, dirz, scale) {
@@ -521,22 +601,33 @@ export class Effects {
       if (d.life <= 0) { d.mesh.visible = false; continue; }
       if (d.life < 2) d.mesh.material.opacity = d.life / 2;
     }
+
+    for (let i = 0; i < this.bloods.length; i++) {
+      const d = this.bloods[i];
+      if (d.life <= 0) continue;
+      d.life -= dt;
+      if (d.life <= 0) { d.mesh.visible = false; continue; }
+      if (d.life < 4) d.mesh.material.opacity = d.life / 4 * 0.95;
+    }
   }
 
   clear() {
     this.sparks.clear();
     this.smoke.clear();
     for (const d of this.decals) { d.life = 0; d.mesh.visible = false; }
+    for (const d of this.bloods) { d.life = 0; d.mesh.visible = false; }
     for (const t of this.tracers) { t.life = 0; t.mesh.visible = false; }
     for (const b of this.blasts) { b.life = 0; b.mesh.visible = false; }
     for (const f of this.flashes) { f.life = 0; f.mesh.visible = false; }
   }
 
   dispose() {
-    this.scene.remove(this.sparks.points, this.smoke.points, this.decalGroup, this.tracerGroup);
+    this.scene.remove(this.sparks.points, this.smoke.points, this.decalGroup, this.tracerGroup, this.bloodGroup);
     this.sparks.points.material.dispose(); this.sparks.geo.dispose();
     this.smoke.points.material.dispose(); this.smoke.geo.dispose();
     for (const d of this.decals) d.mesh.material.dispose();
+    for (const d of this.bloods) d.mesh.material.dispose();
+    for (const t of this.bloodTex) t.dispose();
     for (const t of this.tracers) t.mesh.material.dispose();
     for (const b of this.blasts) { this.scene.remove(b.mesh); b.mesh.material.dispose(); }
     for (const f of this.flashes) { this.scene.remove(f.mesh); f.mesh.material.dispose(); }

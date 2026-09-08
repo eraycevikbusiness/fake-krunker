@@ -140,6 +140,15 @@ menu = new Menu({
     }
   },
   onFullscreen: () => input.toggleFullscreen(),
+  onSkinChange: (weaponId, skinId) => {
+    // Im laufenden Match sofort uebernehmen
+    if (!inMatch() || !game.player) return;
+    game.player.skins[weaponId] = skinId;
+    if (game.player.weapon.id === weaponId) {
+      game.viewmodel.setWeapon(game.player.weapon, game.player.skin, skinId);
+      if (game.player.model) game.player.model.setWeapon(game.player.weapon, skinId);
+    }
+  },
 });
 
 boot();

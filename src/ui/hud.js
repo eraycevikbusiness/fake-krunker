@@ -46,6 +46,8 @@ export class HUD {
       perf: $('perf'),
       clickHint: $('click-hint'),
       speedo: $('speedo'),
+      killcam: $('killcam'), killcamName: $('killcam-name'),
+      dashInd: $('dash-ind'), dashFill: $('dash-fill'),
     };
     this.slotEls = Array.from(document.querySelectorAll('#slots .slot'));
 
@@ -186,6 +188,25 @@ export class HUD {
     }
     this._txt('nc', e.nadeCount, String(p.nades));
     this._cls('ne', this.slotEls[3], 'empty', p.nades <= 0);
+  }
+
+  /** Dash-Anzeige: nur fuer Klassen mit Dash, Balken = Abklingzeit */
+  updateDash(p, cooldownMax) {
+    const e = this.el;
+    if (!e.dashInd) return;
+    this._cls('dashHidden', e.dashInd, 'hidden', !p.canDash);
+    if (!p.canDash) return;
+    const f = cooldownMax > 0 ? clamp(1 - p.dashCooldown / cooldownMax, 0, 1) : 1;
+    this._style('dashW', e.dashFill, 'width', Math.round(f * 100) + '%');
+    this._cls('dashReady', e.dashInd, 'ready', f >= 1);
+  }
+
+  /** Killcam-Banner (name = null blendet aus) */
+  setKillcam(name) {
+    const e = this.el;
+    if (!e.killcam) return;
+    this._cls('kc', e.killcam, 'hidden', !name);
+    if (name) this._txt('kcn', e.killcamName, name);
   }
 
   updateStats(p) {

@@ -1,6 +1,8 @@
 // ============================================================
 // Spielerfigur: Low-Poly-Modell mit Fasen und PBR-Material,
-// Animation, Mini-IK fuer die Arme, Treffer-Flash, Nametag
+// Animation, Mini-IK fuer die Arme, Treffer-Flash, Nametag,
+// Waffen-Skins und ein physikalisches Ragdoll beim Tod
+// (positionsbasierte Dynamik mit 7 Massepunkten).
 // Gesamthoehe 2.4 Einheiten (siehe actor.js -> PHYS.HEIGHT)
 // ============================================================
 
@@ -8,6 +10,7 @@ import * as THREE from 'three';
 import { clamp, damp, lerp } from '../core/utils.js';
 import { mergeBoxes } from '../fx/geom.js';
 import { makePropMaterial, unregisterMaterial } from '../fx/materials.js';
+import { applySkin } from './skins.js';
 
 export const CHAR = {
   HEIGHT: 2.4,
@@ -23,7 +26,12 @@ export { mergeBoxes };
 
 const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
+const _v3 = new THREE.Vector3();
 const _dir = new THREE.Vector3();
+const _q = new THREE.Quaternion();
+const _qy = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
+const Y_AXIS = new THREE.Vector3(0, 1, 0);
+const NY_AXIS = new THREE.Vector3(0, -1, 0);
 const Z_AXIS = new THREE.Vector3(0, 0, 1);
 
 const CLOTH = { m: 0.0, r: 0.85 };
@@ -48,7 +56,7 @@ function darken(hex, f) {
 function legGeo(pants, shoe) {
   return cached('leg|' + pants + '|' + shoe, () => mergeBoxes([
     { x: 0, y: -C.LEG_H / 2, z: 0, w: 0.32, h: C.LEG_H, d: 0.34, color: M(pants, 0, 0.9) },
-    { x: 0, y: -0.36, z: 0, w: 0.33, h: 0.06, d: 0.35, color: M(darken(pants, 0.7), 0, 0.9) },      // Knieschoner
+    { x: 0, y: -0.36, z: 0, w: 0.33, h: 0.06, d: 0.35, color: M(darken(pants, 0.7), 0, 0.9) },
     { x: 0, y: -C.LEG_H + 0.08, z: -0.06, w: 0.34, h: 0.16, d: 0.48, color: M(shoe, 0.1, 0.6) },
   ], { chamfer: 0.025, defaults: CLOTH }));
 }
@@ -56,19 +64,19 @@ function torsoGeo(body, accent) {
   return cached('torso|' + body + '|' + accent, () => mergeBoxes([
     { x: 0, y: C.TORSO_H / 2, z: 0, w: C.SHOULDER, h: C.TORSO_H, d: C.DEPTH, color: M(body, 0, 0.85) },
     { x: 0, y: C.TORSO_H - 0.28, z: 0, w: C.SHOULDER + 0.04, h: 0.3, d: C.DEPTH + 0.04, color: M(accent, 0.1, 0.7) },
-    { x: 0, y: 0.26, z: 0, w: C.SHOULDER + 0.02, h: 0.1, d: C.DEPTH + 0.02, color: M(0x1c1f26, 0.3, 0.6) },   // Guertel
-    { x: 0, y: 0.26, z: -C.DEPTH / 2 - 0.01, w: 0.08, h: 0.08, d: 0.03, color: M(0x8a929e, 1.0, 0.35) }, // Schnalle
-    { x: 0.22, y: 0.5, z: -C.DEPTH / 2 - 0.02, w: 0.16, h: 0.18, d: 0.05, color: M(darken(body, 0.75), 0, 0.8) },  // Tasche
+    { x: 0, y: 0.26, z: 0, w: C.SHOULDER + 0.02, h: 0.1, d: C.DEPTH + 0.02, color: M(0x1c1f26, 0.3, 0.6) },
+    { x: 0, y: 0.26, z: -C.DEPTH / 2 - 0.01, w: 0.08, h: 0.08, d: 0.03, color: M(0x8a929e, 1.0, 0.35) },
+    { x: 0.22, y: 0.5, z: -C.DEPTH / 2 - 0.02, w: 0.16, h: 0.18, d: 0.05, color: M(darken(body, 0.75), 0, 0.8) },
     { x: -0.22, y: 0.5, z: -C.DEPTH / 2 - 0.02, w: 0.16, h: 0.18, d: 0.05, color: M(darken(body, 0.75), 0, 0.8) },
   ], { chamfer: 0.03, defaults: CLOTH }));
 }
 function headGeo(skin, body) {
   return cached('head|' + skin + '|' + body, () => mergeBoxes([
     { x: 0, y: C.HEAD_H / 2, z: 0, w: C.HEAD_H, h: C.HEAD_H, d: C.HEAD_H, color: M(skin, 0, 0.62) },
-    { x: 0, y: C.HEAD_H / 2 + 0.04, z: -C.HEAD_H / 2 - 0.02, w: C.HEAD_H * 0.72, h: C.HEAD_H * 0.3, d: 0.04, color: M(0x141618, 0.6, 0.15) }, // Visier
+    { x: 0, y: C.HEAD_H / 2 + 0.04, z: -C.HEAD_H / 2 - 0.02, w: C.HEAD_H * 0.72, h: C.HEAD_H * 0.3, d: 0.04, color: M(0x141618, 0.6, 0.15) },
     { x: 0, y: C.HEAD_H - 0.02, z: 0, w: C.HEAD_H + 0.06, h: 0.16, d: C.HEAD_H + 0.06, color: M(body, 0, 0.8) },
     { x: 0, y: C.HEAD_H - 0.06, z: -C.HEAD_H / 2 - 0.06, w: C.HEAD_H, h: 0.07, d: 0.24, color: M(body, 0, 0.8) },
-    { x: C.HEAD_H / 2 + 0.01, y: C.HEAD_H / 2, z: 0.02, w: 0.05, h: 0.12, d: 0.12, color: M(0x1c1f26, 0.4, 0.5) },   // Headset
+    { x: C.HEAD_H / 2 + 0.01, y: C.HEAD_H / 2, z: 0.02, w: 0.05, h: 0.12, d: 0.12, color: M(0x1c1f26, 0.4, 0.5) },
     { x: -C.HEAD_H / 2 - 0.01, y: C.HEAD_H / 2, z: 0.02, w: 0.05, h: 0.12, d: 0.12, color: M(0x1c1f26, 0.4, 0.5) },
   ], { chamfer: 0.025, defaults: SKIN }));
 }
@@ -80,8 +88,9 @@ function armGeo(body, skin) {
     { x: 0, y: 0, z: 0.72, w: 0.21, h: 0.22, d: 0.18, color: M(skin, 0, 0.62) },
   ], { chamfer: 0.025, defaults: CLOTH }));
 }
-function weaponGeo(weapon) {
-  return cached('wpn|' + weapon.id, () => mergeBoxes(weapon.parts || [], { chamfer: 0.004 }));
+function weaponGeo(weapon, skinId) {
+  const sid = skinId || 'default';
+  return cached('wpn|' + weapon.id + '|' + sid, () => mergeBoxes(applySkin(weapon.parts || [], sid), { chamfer: 0.004 }));
 }
 
 // Haltungen (Position der rechten Hand im Figurenraum, Rotation des Halters)
@@ -90,19 +99,29 @@ const POSE = {
   pistol:   { pos: [0.20, 1.60, -0.58], rot: [0.00, 0.00, 0.00], follow: 1.0 },
   akimbo:   { pos: [0.00, 1.58, -0.55], rot: [0.00, 0.00, 0.00], follow: 1.0 },
   launcher: { pos: [0.34, 1.78, -0.22], rot: [0.00, 0.00, 0.00], follow: 0.8 },
-  // Klinge zeigt nach oben (CS:GO-Haltung)
   knife:    { pos: [0.50, 1.30, -0.30], rot: [1.15, 0.25, 0.10], follow: 0.2 },
   katana:   { pos: [0.32, 1.28, -0.36], rot: [1.25, 0.10, -0.20], follow: 0.2 },
   nade:     { pos: [0.48, 1.40, -0.30], rot: [0.00, 0.00, 0.00], follow: 0.3 },
 };
 
-/** Schlagkurve: -1 = Ausholen, +1 = Schlagende, 0 = Ruhe */
 function swingCurve(t) {
   if (t < 0.28) return -smooth(t / 0.28);
   if (t < 0.62) return -1 + 2 * smooth((t - 0.28) / 0.34);
   return 1 - smooth((t - 0.62) / 0.38);
 }
 function smooth(x) { x = clamp(x, 0, 1); return x * x * (3 - 2 * x); }
+
+// ------------------------------------------------------------
+// Ragdoll: Punkte hips(0) neck(1) head(2) handL(3) handR(4) footL(5) footR(6)
+// ------------------------------------------------------------
+const RAG_R = 0.16;
+const RAG_H = 1 / 120;
+const RAG_LINKS = [
+  [0, 1, 0.85, 1.0], [1, 2, 0.30, 1.0], [0, 5, 0.92, 1.0], [0, 6, 0.92, 1.0],
+  [1, 3, 0.95, 1.0], [1, 4, 0.95, 1.0], [2, 0, 1.12, 0.35],
+];
+const RAG_MIN = [[5, 6, 0.28], [3, 4, 0.45], [3, 0, 0.55], [4, 0, 0.55], [2, 3, 0.5], [2, 4, 0.5]];
+const RAG_MAX = [[0, 3, 1.25], [0, 4, 1.25], [1, 5, 1.75], [1, 6, 1.75], [2, 5, 2.2], [2, 6, 2.2]];
 
 // ------------------------------------------------------------
 // Nametag
@@ -152,8 +171,8 @@ class NameTag {
 }
 
 /** Waffenmodell (ein Mesh, fuer Weltansicht) */
-export function buildWeaponMesh(weapon, scale, material) {
-  const m = new THREE.Mesh(weaponGeo(weapon), material);
+export function buildWeaponMesh(weapon, scale, material, skinId) {
+  const m = new THREE.Mesh(weaponGeo(weapon, skinId), material);
   m.castShadow = true;
   m.scale.setScalar(scale || 1);
   return m;
@@ -164,13 +183,14 @@ export class CharacterModel {
   constructor(scene, opts) {
     this.scene = scene;
     this.opts = opts;
+    this.world = opts.world || null;
+    this.effects = opts.effects || null;
 
     const skin = opts.skin || 0xe0b090;
     const body = opts.color || 0x3366cc;
     const pants = opts.pants || 0x2a3040;
     const shoe = 0x15171c;
 
-    // Eigenes Material pro Figur (fuer den Treffer-Flash), Shader wird geteilt
     this.mat = makePropMaterial();
     this.flashT = 0;
     this.flashColor = new THREE.Color(1, 1, 1);
@@ -206,6 +226,7 @@ export class CharacterModel {
     this.pivot.add(this.weaponHolder);
     this.weaponMesh = null;
     this.currentWeapon = null;
+    this.currentSkin = 'default';
     this.pose = POSE.rifle;
 
     for (const m of [this.legL, this.legR, this.torso, this.head, this.armL, this.armR]) {
@@ -233,20 +254,24 @@ export class CharacterModel {
     this.deathDir = 0;
     this.lastYaw = 0;
     this.visible = true;
+    this.rag = null;
 
     this._handR = new THREE.Vector3();
     this._handL = new THREE.Vector3();
   }
 
-  setWeapon(weapon) {
+  setWeapon(weapon, skinId) {
+    const sid = skinId || 'default';
+    if (this.weaponMesh && this.currentWeapon === weapon && this.currentSkin === sid) return;
     if (this.weaponMesh) this.weaponHolder.remove(this.weaponMesh);
-    this.weaponMesh = buildWeaponMesh(weapon, 0.9, this.mat);
+    this.weaponMesh = buildWeaponMesh(weapon, 0.9, this.mat, sid);
     this.currentWeapon = weapon;
+    this.currentSkin = sid;
     this.pose = POSE[weapon.hold] || POSE.rifle;
     const g = (weapon.grips && weapon.grips.r) || [0, 0, 0];
     this.weaponMesh.position.set(-g[0] * 0.9, -g[1] * 0.9, -g[2] * 0.9);
     this.weaponHolder.add(this.weaponMesh);
-    this.triggerDraw(weapon.switchTime || 0.4);
+    if (!this.rag) this.triggerDraw(weapon.switchTime || 0.4);
   }
 
   getMuzzleWorld(out) {
@@ -269,7 +294,6 @@ export class CharacterModel {
 
   triggerRecoil(amount) { this.recoilT = Math.min(1, this.recoilT + (amount || 0.6)); }
 
-  /** Treffer-Flash: Figur leuchtet kurz auf (weiss, bei Kill rot) */
   flash(strength, kill) {
     this.flashT = Math.min(1.5, (this.flashT || 0) + (strength || 0.6));
     if (kill) this.flashColor.setRGB(1.6, 0.35, 0.25); else this.flashColor.setRGB(1, 1, 1);
@@ -292,11 +316,179 @@ export class CharacterModel {
     this.deathDir = Math.atan2(dirX, dirZ) - this.lastYaw;
   }
 
-  resetDeath() {
-    this.deathT = 0;
+  // --------------------------------------------------------
+  // Ragdoll
+  // --------------------------------------------------------
+  /**
+   * s: {x,y,z,yaw,vx,vy,vz}  hit: {dirx,diry,dirz,head,strength}
+   */
+  startRagdoll(s, hit) {
+    if (!this.world) return;
+    this.deathT = 0.0001;
+    const c = Math.cos(s.yaw), sn = Math.sin(s.yaw);
+    const L = (lx, ly, lz) => ({
+      x: s.x + lx * c + lz * sn, y: s.y + ly, z: s.z - lx * sn + lz * c, px: 0, py: 0, pz: 0,
+    });
+    const pts = [
+      L(0, 0.95, 0), L(0, 1.80, 0), L(0, 2.10, 0),
+      L(-0.55, 1.55, -0.55), L(0.55, 1.55, -0.55),
+      L(-0.2, 0.06, 0), L(0.2, 0.06, 0),
+    ];
+    const str = (hit && hit.strength) || 8;
+    let dx = hit ? hit.dirx : 0, dy = hit ? hit.diry * 0.4 + 0.35 : 0.5, dz = hit ? hit.dirz : 1;
+    const dl = Math.hypot(dx, dy, dz) || 1;
+    dx = dx / dl * str; dy = dy / dl * str; dz = dz / dl * str;
+    const head = hit && hit.head;
+    const W = head ? [0.7, 1.1, 1.6, 0.7, 0.7, 0.6, 0.6] : [1.1, 1.2, 0.9, 0.8, 0.8, 0.6, 0.6];
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i];
+      const vx = s.vx * 0.5 + dx * W[i] + (Math.random() - 0.5) * 1.2;
+      const vy = s.vy * 0.5 + dy * W[i] + (Math.random() - 0.5) * 0.6;
+      const vz = s.vz * 0.5 + dz * W[i] + (Math.random() - 0.5) * 1.2;
+      p.px = p.x - vx * RAG_H; p.py = p.y - vy * RAG_H; p.pz = p.z - vz * RAG_H;
+    }
+    this.rag = { pts, acc: 0, t: 0, sleeping: false, pooled: false };
+    // Halter/Pivot fuer Weltposen zuruecksetzen
     this.pivot.rotation.set(0, 0, 0);
     this.pivot.position.set(0, 0, 0);
+    this.pivot.scale.set(1, 1, 1);
+    this.root.rotation.set(0, 0, 0);
+    this.tag.sprite.visible = false;
+  }
+
+  _ragStep(dt) {
+    const rag = this.rag;
+    const world = this.world;
+    rag.t += dt;
+    if (rag.sleeping) return;
+    rag.acc = Math.min(rag.acc + dt, RAG_H * 8);
+    const pts = rag.pts;
+    let energy = 0;
+    while (rag.acc >= RAG_H) {
+      rag.acc -= RAG_H;
+      // Verlet-Integration
+      for (let i = 0; i < pts.length; i++) {
+        const p = pts[i];
+        const vx = (p.x - p.px) * 0.992, vy = (p.y - p.py) * 0.992, vz = (p.z - p.pz) * 0.992;
+        p.sx = p.x; p.sy = p.y; p.sz = p.z;
+        p.px = p.x; p.py = p.y; p.pz = p.z;
+        p.x += vx; p.y += vy - 30 * RAG_H * RAG_H; p.z += vz;
+      }
+      // Abstandsbeschraenkungen
+      for (let it = 0; it < 4; it++) {
+        for (let k = 0; k < RAG_LINKS.length; k++) this._link(pts[RAG_LINKS[k][0]], pts[RAG_LINKS[k][1]], RAG_LINKS[k][2], RAG_LINKS[k][3], 0);
+        for (let k = 0; k < RAG_MIN.length; k++) this._link(pts[RAG_MIN[k][0]], pts[RAG_MIN[k][1]], RAG_MIN[k][2], 1, -1);
+        for (let k = 0; k < RAG_MAX.length; k++) this._link(pts[RAG_MAX[k][0]], pts[RAG_MAX[k][1]], RAG_MAX[k][2], 1, 1);
+      }
+      // Kollision mit der Welt (Sweep vom Startpunkt des Schritts)
+      for (let i = 0; i < pts.length; i++) {
+        const p = pts[i];
+        const mx = p.x - p.sx, my = p.y - p.sy, mz = p.z - p.sz;
+        const len = Math.sqrt(mx * mx + my * my + mz * mz);
+        if (len > 1e-6) {
+          const ux = mx / len, uy = my / len, uz = mz / len;
+          const h = world.raycast(p.sx, p.sy, p.sz, ux, uy, uz, len + RAG_R);
+          if (h && h.t < len + RAG_R) {
+            const tt = Math.max(0, h.t - RAG_R);
+            p.x = p.sx + ux * tt; p.y = p.sy + uy * tt; p.z = p.sz + uz * tt;
+            // Geschwindigkeit: Normalanteil daempfen, Tangente mit Reibung
+            const vx = p.x - p.px, vy = p.y - p.py, vz = p.z - p.pz;
+            const vn = vx * h.nx + vy * h.ny + vz * h.nz;
+            const tx = vx - h.nx * vn, ty = vy - h.ny * vn, tz = vz - h.nz * vn;
+            const nx = tx * 0.55 - h.nx * vn * 0.15, ny = ty * 0.55 - h.ny * vn * 0.15, nz = tz * 0.55 - h.nz * vn * 0.15;
+            p.px = p.x - nx; p.py = p.y - ny; p.pz = p.z - nz;
+          }
+        }
+        if (p.y < RAG_R - 0.5) { p.y = RAG_R - 0.5; p.py = p.y; }
+        const ex = p.x - p.px, ey = p.y - p.py, ez = p.z - p.pz;
+        energy += ex * ex + ey * ey + ez * ez;
+      }
+    }
+    if (rag.t > 1.2 && energy < 1e-6) rag.sleeping = true;
+    // Blutlache, sobald der Koerper liegt
+    if (!rag.pooled && rag.t > 0.9 && this.effects) {
+      rag.pooled = true;
+      const hp = pts[0];
+      const gy = world.groundAt(hp.x, hp.z, hp.y + 0.5);
+      if (hp.y - gy < 0.6) this.effects.bloodSplat(hp.x, gy + 0.01, hp.z, 0, 1, 0, 1.7);
+    }
+  }
+
+  /** Abstandsbeschraenkung; mode 0 = fest, -1 = mindestens, 1 = hoechstens */
+  _link(a, b, len, stiff, mode) {
+    const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
+    const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    if (d < 1e-5) return;
+    if (mode === -1 && d >= len) return;
+    if (mode === 1 && d <= len) return;
+    const diff = (d - len) / d * 0.5 * stiff;
+    a.x += dx * diff; a.y += dy * diff; a.z += dz * diff;
+    b.x -= dx * diff; b.y -= dy * diff; b.z -= dz * diff;
+  }
+
+  _poseRagdoll() {
+    const pts = this.rag.pts;
+    const r = this.root;
+    const loc = (p, out) => out.set(p.x - r.position.x, p.y - r.position.y, p.z - r.position.z);
+    const hips = loc(pts[0], _v), neck = loc(pts[1], _v2), head = loc(pts[2], _v3);
+
+    // Rumpf: von der Huefte zum Hals
+    this.torso.position.copy(hips);
+    _dir.subVectors(neck, hips).normalize();
+    this.torso.quaternion.setFromUnitVectors(Y_AXIS, _dir);
+    this.torso.rotation.z = this.torso.rotation.z;   // (Euler aus Quaternion synchron halten)
+    const up = _dir.clone();
+    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(this.torso.quaternion);
+
+    // Kopf
+    this.neck.position.copy(neck);
+    _dir.subVectors(head, neck).normalize();
+    this.neck.quaternion.setFromUnitVectors(Y_AXIS, _dir);
+
+    // Beine: Hueftgelenke seitlich, Richtung Fuss
+    const hipL = hips.clone().addScaledVector(right, -0.2);
+    const hipR = hips.clone().addScaledVector(right, 0.2);
+    this.legL.position.copy(hipL);
+    this.legR.position.copy(hipR);
+    _dir.copy(loc(pts[5], this._handL)).sub(hipL).normalize();
+    this.legL.quaternion.setFromUnitVectors(NY_AXIS, _dir);
+    _dir.copy(loc(pts[6], this._handL)).sub(hipR).normalize();
+    this.legR.quaternion.setFromUnitVectors(NY_AXIS, _dir);
+    this.legL.scale.set(1, 1, 1); this.legR.scale.set(1, 1, 1);
+
+    // Arme: Schultern am Rumpf oben, Richtung Hand
+    const shL = neck.clone().addScaledVector(right, -0.55).addScaledVector(up, -0.1);
+    const shR = neck.clone().addScaledVector(right, 0.55).addScaledVector(up, -0.1);
+    this.armL.position.copy(shL);
+    this.armR.position.copy(shR);
+    loc(pts[3], this._handL);
+    loc(pts[4], this._handR);
+    this._aimArm(this.armL, this._handL);
+    this._aimArm(this.armR, this._handR);
+
+    // Waffe bleibt in der rechten Hand
+    this.weaponHolder.position.copy(this._handR);
+    this.weaponHolder.quaternion.copy(this.armR.quaternion).multiply(_qy);
+  }
+
+  resetDeath() {
+    this.deathT = 0;
+    this.rag = null;
+    this.pivot.rotation.set(0, 0, 0);
+    this.pivot.position.set(0, 0, 0);
+    this.pivot.scale.set(1, 1, 1);
     this.root.scale.setScalar(1);
+    this.torso.position.set(0, C.LEG_H, 0);
+    this.torso.quaternion.identity();
+    this.neck.position.set(0, C.LEG_H + C.TORSO_H, 0);
+    this.neck.quaternion.identity();
+    this.legL.position.set(-0.2, C.LEG_H, 0);
+    this.legR.position.set(0.2, C.LEG_H, 0);
+    this.legL.quaternion.identity();
+    this.legR.quaternion.identity();
+    this.armL.position.set(-(C.SHOULDER / 2 + 0.12), this.shoulderY, 0);
+    this.armR.position.set(C.SHOULDER / 2 + 0.12, this.shoulderY, 0);
+    this.weaponHolder.quaternion.identity();
   }
 
   _aimArm(arm, target) {
@@ -310,10 +502,9 @@ export class CharacterModel {
 
   update(dt, s, camPos) {
     const r = this.root;
-    r.position.set(s.x, s.y, s.z);
+    if (!this.rag) r.position.set(s.x, s.y, s.z);
     this.lastYaw = s.yaw;
 
-    // Treffer-Flash abklingen
     if (this.flashT > 0) {
       this.flashT = Math.max(0, this.flashT - dt * 9);
       this.mat.emissive.copy(this.flashColor).multiplyScalar(this.flashT * 0.9);
@@ -322,14 +513,20 @@ export class CharacterModel {
     }
 
     if (s.dead) {
-      if (this.deathT === 0) this.startDeath(Math.sin(s.yaw), Math.cos(s.yaw));
       this.deathT += dt;
-      const t = Math.min(1, this.deathT / 0.55);
-      const e = 1 - (1 - t) * (1 - t);
-      this.pivot.rotation.x = e * Math.PI * 0.48 * Math.cos(this.deathDir);
-      this.pivot.rotation.z = e * Math.PI * 0.48 * Math.sin(this.deathDir);
-      this.pivot.position.y = -e * 0.25;
       this.tag.sprite.visible = false;
+      if (this.rag) {
+        this._ragStep(dt);
+        this._poseRagdoll();
+      } else {
+        if (this.deathT <= dt * 1.5) this.startDeath(Math.sin(s.yaw), Math.cos(s.yaw));
+        const t = Math.min(1, this.deathT / 0.55);
+        const e = 1 - (1 - t) * (1 - t);
+        r.rotation.y = s.yaw;
+        this.pivot.rotation.x = e * Math.PI * 0.48 * Math.cos(this.deathDir);
+        this.pivot.rotation.z = e * Math.PI * 0.48 * Math.sin(this.deathDir);
+        this.pivot.position.y = -e * 0.25;
+      }
       if (this.deathT > 3.2) {
         const f = clamp(1 - (this.deathT - 3.2) / 0.8, 0, 1);
         this.root.scale.setScalar(f);
@@ -347,7 +544,7 @@ export class CharacterModel {
     this.pivot.position.y = 0;
 
     const spd = s.speed || 0;
-    const moving = spd > 0.6 && s.grounded;
+    const moving = spd > 0.6 && (s.grounded || s.wallrun);
     const rate = clamp(spd * 0.85, 0, 16);
     if (moving) this.phase += dt * rate;
     else this.phase = damp(this.phase % (Math.PI * 2), 0, 8, dt);
@@ -364,7 +561,7 @@ export class CharacterModel {
     this.torso.position.y = C.LEG_H - bodyDip;
     this.neck.position.y = C.LEG_H + C.TORSO_H - bodyDip;
 
-    if (!s.grounded) {
+    if (!s.grounded && !s.wallrun) {
       this.legL.rotation.x = lerp(this.legL.rotation.x, -0.55, 0.35);
       this.legR.rotation.x = lerp(this.legR.rotation.x, 0.3, 0.35);
     }
@@ -372,6 +569,8 @@ export class CharacterModel {
       this.legL.rotation.x = lerp(this.legL.rotation.x, -1.1, 0.4);
       this.legR.rotation.x = lerp(this.legR.rotation.x, -0.9, 0.4);
     }
+    // Wandlauf: Koerper neigt sich von der Wand weg
+    this.pivot.rotation.z = damp(this.pivot.rotation.z, s.wallrun ? s.wallrun * 0.35 : 0, 10, dt);
 
     // ---- Waffe halten ----
     this.recoilT = damp(this.recoilT, 0, 12, dt);
@@ -408,7 +607,6 @@ export class CharacterModel {
         hy += sc < 0 ? -sc * 0.30 : -sc * 0.30;
         hz -= fwd * 0.4;
       } else if (hold === 'katana') {
-        // Horizontaler Schwung: Klinge kippt nach vorn und wischt durch
         rx -= 1.15 * (0.5 + 0.5 * Math.abs(sc));
         ry += sc * 1.3;
         hx -= fwd * 0.35;

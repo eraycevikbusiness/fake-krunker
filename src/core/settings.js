@@ -27,7 +27,9 @@ export const SCHEMA = [
   { id: 'fog',         label: 'Nebel',               type: 'check', def: true },
   { id: 'particles',   label: 'Partikel-Menge',      type: 'range', min: 0, max: 2, step: 0.1, def: 1, fmt: v => Math.round(v * 100) + '%' },
   { id: 'decals',      label: 'Einschusslöcher',     type: 'check', def: true },
-  { id: 'ragdolls',    label: 'Todes-Animationen',   type: 'check', def: true },
+  { id: 'ragdolls',    label: 'Ragdoll-Tode',        type: 'check', def: true },
+  { id: 'blood',       label: 'Blut-Decals',         type: 'check', def: true },
+  { id: 'killcam',     label: 'Killcam (Replay beim Tod)', type: 'check', def: true },
   { id: 'maxFps',      label: 'FPS-Limit',           type: 'select', def: '0', options: [['0','Unbegrenzt'],['30','30'],['60','60'],['120','120'],['144','144'],['240','240']] },
 
   { head: 'HUD' },

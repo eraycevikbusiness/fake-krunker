@@ -49,7 +49,8 @@ Spiel Browser-Kürzel wie `Strg+W` ab (Keyboard-Lock-API in Chrome/Edge).
 | `R` | Nachladen |
 | `1` `2` `3` / Mausrad | Primär- / Sekundär- / Nahkampfwaffe |
 | `Q` | Zurück zur vorherigen Waffe |
-| `F` | Schneller Nahkampfschlag (ohne Waffenwechsel) |
+| `F` | Tippen: schneller Nahkampfschlag (ohne Waffenwechsel) — Halten: Waffe inspizieren |
+| `E` | Dash (Klassen mit Dash-Perk: Run N Gun, Agent, Ninja; auch in der Luft) |
 | `G` | Granate werfen |
 | `Tab` | Rangliste |
 | `Esc` | Pause (dort: Klasse wechseln, Einstellungen, Vollbild) |
@@ -146,6 +147,39 @@ die Waffe, wenn die Munition leer ist.
   geänderte Werte ins DOM
 * Schatten: Niedrig/Hoch nutzen das günstigere PCF, Ultra weiches PCF
 
+## Skins
+
+Im Menü unter **SKINS** hat jede Waffe sieben Varianten (Standard, Gold, Neon,
+Camo, Crimson, Frost, Obsidian) mit drehbarer 3D-Vorschau. Skins tauschen die
+PBR-Materialien der Bauteile (Farbe, Metalness, Roughness, Emissive) und gelten
+in Ego- und Fremdansicht; Bots tragen zufällige Skins. Definitionen in
+`src/game/skins.js`.
+
+## Dash und Wandlauf
+
+* **Dash (E):** kurzer Stoß in Bewegungsrichtung (auch in der Luft), 2,4 s
+  Abklingzeit, Anzeige unten rechts. Klassen: Run N Gun, Agent, Ninja.
+* **Wandlauf (Agent, Ninja):** schräg gegen eine Wand springen und die
+  Richtung halten. Bis 1,3 s an der Wand entlang mit reduzierter Schwerkraft,
+  Kamera neigt sich von der Wand weg. Leertaste = Wandsprung (von der Wand
+  weg und nach oben), Doppelsprung bleibt erhalten.
+
+## Killcam
+
+Beim Tod läuft ein Replay der letzten drei Sekunden aus den Augen des Killers
+(inklusive dessen Schüssen und Waffe), danach friert das Bild am Todesmoment
+ein und der Respawn folgt. Grundlage ist ein 60-Hz-Ringpuffer aller
+Akteurzustände (`_recordHistory` in `src/game/game.js`). Abschaltbar in den
+Einstellungen.
+
+## Ragdoll und Blut
+
+Tote fallen als Ragdoll: sieben Massepunkte (Hüfte, Hals, Kopf, Hände, Füße)
+mit Abstandsbeschränkungen, Verlet-Integration und Sweep-Kollision gegen die
+Welt; der Treffer gibt den Impuls (Kopfschüsse reißen den Kopf mit). Nach dem
+Liegenbleiben entsteht eine Blutlache. Treffer sprühen Blut auf die Wand
+dahinter und den Boden (bis zu 64 Decals, abschaltbar).
+
 ## Nahkampf
 
 Messer und Katana werden wie in CS:GO/Valorant mit der Klinge nach oben
@@ -164,7 +198,10 @@ Crack, Body mit steilem Pitch-Drop, Sub und resonantem Tiefpass-Sweep durch
 eine Sättigungsstufe (Waveshaper), danach Mechanik-Klicks (Repetierwaffen
 mit zweitem Klick) und Nachhall über einen Hall-Bus, der mit der Entfernung
 lauter wird. Jede Waffenklasse hat ein eigenes Preset (`PRESETS` in
-`src/core/audio.js`). Schießen fühlt sich weich an: Rückstoß wird über
+`src/core/audio.js`). Schritte und Landungen klingen je nach Untergrund
+anders (Sand, Erde, Stein, Holz, Metall, Gitter — pro Kartenbox in
+`src/world/mapdata.js` über `surfaces` zugeordnet). Der Treffer-Tick hängt von
+der Entfernung ab: weit weg dünner, leiser und mit kurzer Schall-Laufzeit. Schießen fühlt sich weich an: Rückstoß wird über
 ~50 ms verteilt, dazu ein Kamera-Kick als Feder, exakte Feuerrate
 unabhängig von der Bildrate, Mündungslicht und Treffer-Flash. Jede Waffe hat ein eigenes
 Zück-Geräusch (Ladegriff, Schlitten, Messer-„Shing“, Katana-Ziehen mit
