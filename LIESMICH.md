@@ -51,6 +51,8 @@ Spiel Browser-Kürzel wie `Strg+W` ab (Keyboard-Lock-API in Chrome/Edge).
 | `Q` | Zurück zur vorherigen Waffe |
 | `F` | Tippen: schneller Nahkampfschlag (ohne Waffenwechsel) — Halten: Waffe inspizieren |
 | `E` | Dash (Klassen mit Dash-Perk: Run N Gun, Agent, Ninja; auch in der Luft) |
+| `4` | Luftschlag auf den Blickpunkt (Killstreak ab 7 Kills) |
+| Linksklick halten | Bogen spannen, loslassen schießt; Minigun läuft an |
 | `G` | Granate werfen |
 | `Tab` | Rangliste |
 | `Esc` | Pause (dort: Klasse wechseln, Einstellungen, Vollbild) |
@@ -71,15 +73,26 @@ Das Movement ist Quake-/Source-artig, aber mit sauberem Feel:
 
 ## Inhalt
 
-**11 Klassen** mit eigenen Werten, Waffen und Perks:
+**14 Klassen** mit eigenen Werten, Waffen und Perks:
 Triggerman, Hunter, Run N Gun, Spray N Pray, Detective, Bull, Vince,
-Rocketeer, Agent, Commando, Ninja. Die Klasse lässt sich auch im Match
-wechseln (Pause → Klasse wechseln, gilt ab dem nächsten Spawn).
+Rocketeer, Agent, Commando, Ninja, Archer, Pyro, Juggernaut. Die Klasse
+lässt sich auch im Match wechseln (Pause → Klasse wechseln, gilt ab dem
+nächsten Spawn).
 
-**14 Waffen:** Sturmgewehr, MP, Scharfschützengewehr (Zielfernrohr,
+**18 Waffen:** Sturmgewehr, MP, Scharfschützengewehr (Zielfernrohr,
 Durchschuss), Schrotflinte, LMG, Marksman, Feuerstoß-Gewehr, Akimbo Uzi,
 Raketenwerfer, Alien Blaster, Revolver, Pistole, Kampfmesser, Katana —
-dazu Splittergranaten.
+dazu Splittergranaten und die vier neuen:
+
+* **Recurve-Bogen (Archer):** Maustaste halten spannt (0,8 s), loslassen
+  schießt. Der Pfeil fliegt mit Schwerkraft; Schaden und Tempo hängen von
+  der Spannung ab, voll gespannt tötet ein Körpertreffer.
+* **Flammenwerfer (Pyro):** Dauerfeuer als Kegel auf 11 m, Getroffene
+  brennen 2,4 s nach (Brandschaden geht auf den Pyro).
+* **Minigun (Juggernaut):** 0,7 s Anlaufzeit, dann 1150 Schuss/min aus
+  sechs Läufen, bremst beim Laufen.
+* **Wurfmesser (Sekundär bei Archer und Ninja):** 8 Messer mit Flugbahn,
+  75 Schaden, Kopftreffer tötet.
 
 Jede Waffe hat eigene Werte für Schaden, Feuerrate, Streuung, Rückstoß,
 Magazin, Nachladezeit, Reichweiten-Abfall, Zoom und Trefferzonen-Multiplikatoren,
@@ -87,18 +100,58 @@ außerdem Griffpunkte und eine Haltung: Messer werden im Vorwärtsgriff
 geführt, das Katana beidhändig in Kampfstellung, jede Waffe hat eigene
 Schlag-, Nachlade- und Wechselanimationen.
 
-**3 Karten** (alle punktsymmetrisch, also für beide Teams fair):
+**4 Karten** (alle punktsymmetrisch, also für beide Teams fair):
 
 * **Sandstorm** — Wüstenstadt mit Zentral-Ziggurat, Dachlinien und Brücken
 * **Burg** — Wehrgänge, vier Ecktürme, Bergfried im Hof
 * **Citadel** — Industrieanlage mit Reaktor, Laufsteg-Ring und Containern
+* **Hafen** — Containerhafen mit zwei Portalkränen (per Sprungpad
+  erreichbar), Lagerhalle mit Fenstern, Pier über dem Wasser, Tanklager
+  mit explosiven Fässern
 
-**Modi:** Team Deathmatch und Free For All, mit einstellbarem Punkte- und
-Zeitlimit.
+**Wetter und Tageszeit** (im Spielen-Tab, pro Match): Klar, Abend, Regen
+(Regenstreifen, nasse Böden, Regenrauschen), Nebel (Sicht 60 m), Nacht
+(Laternen mit Punktlichtern, Mond) und Gewitternacht (Blitze mit Donner).
+Definition in `src/world/weather.js`.
+
+**Zerstörbare Objekte:** Holzkisten (70 HP) zersplittern, Glasscheiben
+zerspringen beim ersten Treffer, rote Fässer explodieren und zünden
+benachbarte Fässer in einer Kettenreaktion. Alles baut sich nach 30–45 s
+wieder auf, sobald niemand drinsteht. Kisten und Fässer sind Deckung, bis
+sie weg sind. Explosionen aus Fässern werden dem Schützen gutgeschrieben.
+
+**Modi** (Auswahl im Spielen-Tab, das Punktelimit passt sich an):
+
+| Modus | Regel |
+|---|---|
+| Team Deathmatch | Zwei Teams, Kills zählen |
+| Free For All | Jeder gegen jeden, Bestenliste (Top 3 + eigener Platz) im HUD |
+| Gun Game | Jeder Kill schaltet zur nächsten von 17 Waffen (Pistole bis Katana). Wer mit der letzten Waffe trifft, gewinnt; ein Messer-Kill wirft das Opfer eine Stufe zurück |
+| Capture the Flag | Gegnerflagge berühren, zur eigenen Basis tragen (13 % langsamer). Fallen gelassene Flaggen kehren nach 25 s oder per Berührung zurück |
+| Hardpoint | Eine Zone wandert alle 60 s. Nur ein Team in der Zone = 1 Punkt/s, beide = umkämpft |
+
+Bots verstehen die Modi: In CTF greift die Hälfte an, die andere verteidigt
+oder holt die eigene Flagge zurück; in Hardpoint laufen sie in die Zone und
+halten sie. Flaggen und Zone erscheinen auf der Minimap.
+
+**Killstreaks** (abschaltbar): 3 Kills → UAV (14 s, Gegner auf der Minimap
+und mit Marker durch Wände), 5 Kills → Schild (80 Punkte, absorbiert vor
+der Rüstung), 7 Kills → Luftschlag: Taste `4` legt sechs Einschläge quer
+zur Blickrichtung auf den anvisierten Punkt. Bots bekommen dieselben
+Belohnungen.
+
+**Team-Erkennbarkeit:** Beim Start sagt ein Toast, in welchem Team du bist,
+dein Team ist in der Punkteleiste mit „DU“ markiert, das HUD hat einen
+dezenten Rand in Teamfarbe, deine Arme in der Egoansicht sind in Teamfarbe
+und Mitspieler tragen einen farbigen Pfeil mit Namen und Lebensbalken über
+dem Kopf, der auch durch Wände sichtbar ist. Gegner sieht man auf der
+Minimap nur, wenn sie gerade geschossen haben oder ein UAV läuft.
 
 **Bots:** 1–15 Gegner in vier Schwierigkeitsgraden (Einfach bis Albtraum).
-Sie unterscheiden sich in Reaktionszeit, Zielgenauigkeit, Strafing,
-Rückstoßkontrolle, Granatennutzung und Wahrnehmungsreichweite.
+Sie unterscheiden sich in Reaktionszeit, Drehgeschwindigkeit,
+Einschwingzeit, Zielfehler, Strafing, Rückstoßkontrolle, Deckungssuche,
+Granatennutzung und Wahrnehmungsreichweite. Gemessene Trefferquote im
+Bot-Gefecht: Einfach etwa 7 %, Normal etwa 16 %, Albtraum etwa 20 %.
 
 ## Trefferzonen
 
@@ -120,6 +173,25 @@ Wehrgänge genauso wie du. Im Kampf halten sie eine waffenabhängige
 Wunschdistanz (Schrotflinte nah, Sniper weit), strafen, springen, legen
 Feuerpausen zur Rückstoßkontrolle ein, laden in Deckung nach und wechseln
 die Waffe, wenn die Munition leer ist.
+
+**Warum sie keinen Aimbot haben:** Ein Bot zielt nie auf die exakte
+Position. Sein Zielpunkt läuft dem Gegner hinterher (Nachziehverzögerung
+70–280 ms je nach Stufe), muss nach jedem Neuerfassen erst einschwingen
+(gedämpfte Feder mit begrenzter Drehgeschwindigkeit, schwingt bei schnellen
+Drehungen über) und trägt einen langsam wandernden Fehler, der mit
+Entfernung, Zieltempo und eigenem Tempo wächst. Der Rückstoß der eigenen
+Waffe treibt den Lauf hoch und wird nur teilweise kompensiert. Geschossen
+wird erst, wenn die Zielfeder ruhig ist. Kopfschüsse gibt es nur, wenn der
+Bot eingeschwungen ist und das Ziel stillsteht. Das Blickfeld ist
+begrenzt; hinter sich bemerkt ein Bot nur laute oder sehr nahe Gegner.
+
+Dazu kommt Taktik: Bei wenig Leben oder beim Nachladen suchen sie einen
+Navigationspunkt, den der Gegner nicht sieht, und gehen dort in Deckung.
+Ist ein Gegner hinter Deckung verschwunden, werfen sie eine Granate auf
+die letzte bekannte Position. Sniper und Bogenschützen suchen sich hohe
+Positionen und bleiben beim Schießen stehen, Nahkampf- und
+Schrotflintenklassen nutzen den Dash, um den Abstand zu schließen. Der
+Schwierigkeitsgrad steht im Spielen-Tab.
 
 ## Grafik
 
@@ -154,6 +226,62 @@ Camo, Crimson, Frost, Obsidian) mit drehbarer 3D-Vorschau. Skins tauschen die
 PBR-Materialien der Bauteile (Farbe, Metalness, Roughness, Emissive) und gelten
 in Ego- und Fremdansicht; Bots tragen zufällige Skins. Definitionen in
 `src/game/skins.js`.
+
+Unter der Vorschau lassen sich pro Waffe **Sticker** wählen (Totenkopf,
+Flamme, Blitz, Stern, Zielscheibe, FRAGSTORM-Logo, GG EZ …). Der Aufkleber
+sitzt automatisch auf der größten Seitenfläche der Waffe, links und rechts
+(`src/game/stickers.js`).
+
+## Charakter
+
+Im Tab **CHARAKTER** wird die Spielfigur angepasst, mit drehbarer Vorschau:
+
+* **Outfit:** zwölf Farbsets (Team, Shadow, Desert, Toxic, Royal, Arctic,
+  Lava, Ocean, Gold, Camo, Candy, Neon). Im Teammodus bleiben Schulterband,
+  Ärmelbund und Kopfbedeckung in Teamfarbe, damit Gegner erkennbar bleiben.
+* **Kopfbedeckung:** Basecap (vorn/verkehrt), Beanie, Helm, Zylinder, Krone,
+  Hörner, Cyber-Visier, Katzenohren, Heiligenschein, Bandana, Stirnband.
+  Die Hüte hängen am Kopf und fallen beim Ragdoll mit.
+* **Kill-Effekt:** spielt bei Gegnern, die du eliminierst: Konfetti,
+  Feuerwerk, Pixel-Zerfall, Seele, Blutfontäne, Münzregen. Bei Konfetti,
+  Feuerwerk und Pixel verschwindet der Körper sofort. Abschaltbar in den
+  Einstellungen.
+* **Kill-Icon:** Emoji im Killfeed und in der Kill-Meldung (Schädel, Feuer,
+  Blitz, Krone, Geist …).
+
+Bots bekommen zufällige Outfits, Hüte, Sticker, Effekte und Icons.
+Definitionen in `src/game/cosmetics.js`.
+
+## Training (Aim-Trainer)
+
+Der Tab **TRAINING** startet einen Drill auf der Karte *Schießstand*: keine
+Gegner, unbegrenzte Munition, die Waffen deiner Klasse.
+
+| Drill | Ablauf | Wertung |
+|---|---|---|
+| Gridshot | drei Ziele gleichzeitig, 60 s | Treffer, Genauigkeit, Treffer/s |
+| Flick | ein Ziel nach dem anderen, weit auseinander, 45 s | Treffer, Genauigkeit |
+| Reaktion | Ziel erscheint nach zufälliger Pause, 15 Runden | Ø Reaktionszeit in ms, Fehlstarts |
+| Tracking | ein bewegtes Ziel, 45 s | Anteil der Zeit mit Fadenkreuz auf dem Ziel |
+
+Zielgröße (klein/mittel/groß) und Distanz (14/24/38 m) sind wählbar;
+Bestwerte werden pro Kombination gespeichert. Zielscheiben haben eine eigene
+Treffererkennung für Hitscan, Projektile und Nahkampf (`src/game/training.js`).
+
+## Fadenkreuz, Hitsound und Zielhilfe
+
+* **Fadenkreuz-Editor** (Einstellungen): Form (Kreuz, T, X, Kreis, Punkt,
+  Kreis + Kreuz), Länge, Dicke, Abstand, Mittelpunkt, Farbe, Treffer-Farbe,
+  schwarzer Rand, Deckkraft, dynamische Weitung. Die Vorschau zeigt das
+  Fadenkreuz 1:1 auf einem Beispielbild, das HUD zeichnet es als Canvas
+  (`src/ui/crosshair.js`).
+* **Hitsound:** acht Varianten (Standard, Klick, Ping, Bass, Retro, Holz,
+  Glocke, Aus) mit eigener Lautstärke und Anhören-Button. Kopfschüsse klingen
+  höher, Kills bekommen einen Doppelklick.
+* **Zielhilfe** (Aus / Leicht / Mittel / Stark): nahe am Gegner wird die Maus
+  langsamer („Reibung“), und bei Mausbewegung zieht die Blickrichtung leicht
+  zum Ziel. Ohne Mausbewegung passiert nichts, es wird nie von selbst gezielt.
+  Gilt auch für Zielscheiben im Training.
 
 ## Dash und Wandlauf
 
@@ -232,18 +360,24 @@ src/
   main.js             Einstiegspunkt, Spielschleife, Zustände, Auto-Auflösung
   core/               Eingabe, Audio, Einstellungen, Mathe-Helfer
   world/
-    mapdata.js        Kartendefinitionen + Rampen-Validierung
-    world.js          Geometrie, Kollision, Grid-Raycast, Navigation
+    mapdata.js        Kartendefinitionen + Rampen-Validierung, Flaggen, Hardpoints, Zerstoerbares
+    weather.js        Wetter und Tageszeit (Licht, Nebel, Laternen)
+    world.js          Geometrie, Kollision, Grid-Raycast, Navigation, zerstoerbare Collider
   fx/effects.js       Partikel, Tracer, Decals, Explosionen
   game/
     weapons.js        Waffen- und Klassendaten (inkl. Griffpunkte/Haltungen)
+    skins.js          Waffen-Skins
+    stickers.js       Waffen-Sticker (Canvas-Texturen, automatische Platzierung)
+    cosmetics.js      Outfits, Kopfbedeckungen, Kill-Effekte, Kill-Icons
+    training.js       Aim-Trainer (Drills, Zielscheiben, Bestwerte)
+    modes.js          Capture the Flag, Hardpoint, Gun Game (Regeln, Bot-Ziele, HUD)
     actor.js          Bewegungsphysik, Trefferzonen, Waffenlogik (gemeinsame Basis)
     player.js         Lokaler Spieler, Kamera, Rückstoß, Todeskamera
     bot.js            Bot-KI
     character.js      Spielerfiguren (verschmolzene Meshes, Arm-IK)
     viewmodel.js      Waffenansicht (Haltungen, Schlaganimationen)
     game.js           Match-Logik, Kampfsystem, Projektile
-  ui/                 HUD, Menü, Minimap
+  ui/                 HUD, Menü, Minimap, Fadenkreuz-Renderer, 3D-Vorschauen
 ```
 
 ## Anpassen

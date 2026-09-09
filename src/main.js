@@ -1,10 +1,13 @@
 // ============================================================
-// Einstiegspunkt: Bootstrap, Spielschleife, Zustandsverwaltung
+// Einstiegspunkt: Bootstrap, Spielschleife, Zustandsverwaltung,
+// Touch-Steuerung, Replay-Wiedergabe
 // ============================================================
 
 import { Input } from './core/input.js';
 import { audio } from './core/audio.js';
 import { settings, loadSettings, saveSettings } from './core/settings.js';
+import { applyTeamCss } from './core/teams.js';
+import { TouchControls, wantsTouch } from './core/touch.js';
 import { HUD } from './ui/hud.js';
 import { Minimap } from './ui/minimap.js';
 import { Menu } from './ui/menu.js';
@@ -21,9 +24,17 @@ const minimap = new Minimap(document.getElementById('minimap'));
 
 let game = null;
 let menu = null;
-let state = 'menu';        // menu | playing | paused | ended
+let touch = null;
+let state = 'menu';        // menu | playing | paused | ended | replay
 let scoreboardOpen = false;
 let showPerf = settings.showFps;
+let lastReplayData = null;
+
+function applyHudScale() {
+  document.documentElement.style.setProperty('--hud-scale', String(clamp(settings.hudScale || 1, 0.8, 1.6)));
+}
+applyHudScale();
+applyTeamCss(document.documentElement);
 
 // ------------------------------------------------------------
 // Initialisierung
@@ -61,13 +72,27 @@ function createGame() {
     hud.hideDeath();
     hud.setClickHint(false);
     input.exitLock();
+    lastReplayData = game.getReplayData();
+    menu.setReplayAvailable(!!lastReplayData);
     menu.showEnd(game, winner, won);
+  };
+  game.onTrainingEnd = (results) => {
+    setState('ended');
+    hud.show(false);
+    hud.showScoreboard(false);
+    hud.hideDeath();
+    hud.setClickHint(false);
+    input.exitLock();
+    lastReplayData = null;
+    menu.setReplayAvailable(false);
+    menu.showTrainingEnd(results);
   };
 }
 
 function setState(s) {
   state = s;
-  input.gameActive = (s === 'playing' || s === 'paused') && !!game && game.running;
+  input.gameActive = (s === 'playing' || s === 'paused' || s === 'replay') && !!game && (game.running || game.replaying);
+  if (touch) touch.setVisible(s === 'playing' || s === 'replay');
 }
 
 function inMatch() { return !!game && game.running && (state === 'playing' || state === 'paused'); }
@@ -87,11 +112,50 @@ function pauseGame() {
   menu.showPause();
 }
 
+// ------------------------------------------------------------
+// Replay-Wiedergabe
+// ------------------------------------------------------------
+function startReplay(data) {
+  if (!data) return;
+  audio.init(); audio.resume();
+  if (!game) createGame();
+  menu.hideMenu(); menu.hidePause(); menu.hideEnd();
+  hud.show(false);
+  if (!game.startReplay(data)) { menu.showMenu('play', false); return; }
+  setState('replay');
+  requestLock();
+}
+
+function exitReplay() {
+  if (!game || !game.replaying) return;
+  game.stopReplay();
+  input.exitLock();
+  setState('ended');
+  if (lastReplayData && menu.el.endTitle.textContent) menu.showEndAgain();
+  else menu.showMenu('play', false);
+}
+
+function downloadReplay(data) {
+  if (!data) return;
+  try {
+    const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    a.download = `fragstorm-replay-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}.json`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  } catch (e) { console.warn('Replay speichern fehlgeschlagen', e); }
+}
+
 menu = new Menu({
   onPlay: (cfg) => {
     audio.init();
     audio.resume();
     if (!game) createGame();
+    if (game.replaying) game.stopReplay();
     menu.hideMenu();
     menu.hidePause();
     menu.hideEnd();
@@ -114,13 +178,16 @@ menu = new Menu({
     hud.showScoreboard(false);
     hud.hideDeath();
     hud.setClickHint(false);
-    if (game) { game.running = false; game.cleanup(); }
+    if (game) { if (game.replaying) game.stopReplay(); game.running = false; game.cleanup(); }
     setState('menu');
     menu.showMenu('play', false);
   },
   onOpenSettings: () => { setState('paused'); },
   onSettingChange: (id) => {
     saveSettings();
+    if (id === 'hudScale' || id === '*') applyHudScale();
+    if (id === 'colorblind' || id === '*') { applyTeamCss(document.documentElement); if (game && game.world) game.refreshTeamColors(); }
+    if (id === 'touch' || id === '*') touch.enable(wantsTouch());
     if (!game) return;
     if (id === 'renderScale' || id === 'shadows' || id === 'antialias' || id === 'autoQuality' ||
         id === 'postfx' || id === 'ssao' || id === 'bloom' || id === '*') {
@@ -139,17 +206,43 @@ menu = new Menu({
       hud.toast('KLASSE WIRD BEIM NÄCHSTEN SPAWN GEWECHSELT', true);
     }
   },
+  onAttachmentChange: (att) => {
+    if (inMatch()) game.setPlayerAttachments(att);
+  },
   onFullscreen: () => input.toggleFullscreen(),
   onSkinChange: (weaponId, skinId) => {
     // Im laufenden Match sofort uebernehmen
     if (!inMatch() || !game.player) return;
-    game.player.skins[weaponId] = skinId;
-    if (game.player.weapon.id === weaponId) {
-      game.viewmodel.setWeapon(game.player.weapon, game.player.skin, skinId);
-      if (game.player.model) game.player.model.setWeapon(game.player.weapon, skinId);
+    const p = game.player;
+    p.skins[weaponId] = skinId;
+    if (p.weapon.id === weaponId) {
+      game.viewmodel.setWeapon(p.weapon, p.skin, skinId, game.stickerFor(p));
+      if (p.model) p.model.setWeapon(p.weapon, skinId, game.stickerFor(p));
     }
   },
+  onStickerChange: (weaponId, stickerId) => {
+    if (!inMatch() || !game.player) return;
+    const p = game.player;
+    p.stickers[weaponId] = stickerId;
+    if (p.weapon.id === weaponId) {
+      game.viewmodel.setWeapon(p.weapon, p.skin, game.skinFor(p), stickerId);
+      if (p.model) p.model.setWeapon(p.weapon, game.skinFor(p), stickerId);
+    }
+  },
+  onCosmeticChange: (c) => {
+    if (!inMatch() || !game.player) return;
+    const p = game.player;
+    p.outfit = c.outfit; p.hat = c.hat; p.killEffect = c.killEffect; p.killIcon = c.killIcon;
+    game.rebuildPlayerModel();
+  },
+  onReplay: () => startReplay(lastReplayData),
+  onReplaySave: () => downloadReplay(lastReplayData),
+  onReplayLoad: (data) => { lastReplayData = data; startReplay(data); },
 });
+
+// Touch-Steuerung (Handy/Tablet)
+touch = new TouchControls(input, { onPause: () => { if (state === 'playing') pauseGame(); else if (state === 'replay') exitReplay(); } });
+touch.enable(wantsTouch());
 
 boot();
 
@@ -159,6 +252,7 @@ boot();
 function requestLock() {
   audio.init();
   audio.resume();
+  if (input.virtualLock) return;     // Touch: kein Pointer-Lock
   input.requestLock();
 }
 
@@ -168,6 +262,8 @@ input.onLockChange((locked, error) => {
     if (state === 'playing') menu.hidePause();
     return;
   }
+  if (input.virtualLock) return;
+  if (state === 'replay') { hud.setClickHint(true); return; }
   if (state !== 'playing') return;
   if (error) {
     // Browser hat die Sperre verweigert (z.B. Chrome-Cooldown nach Esc):
@@ -180,7 +276,7 @@ input.onLockChange((locked, error) => {
 });
 
 canvas.addEventListener('click', () => {
-  if (state === 'playing' && !input.locked) requestLock();
+  if ((state === 'playing' || state === 'replay') && !input.locked && !input.virtualLock) requestLock();
 });
 
 // Tab-Wechsel / Fenster minimiert -> pausieren
@@ -193,7 +289,9 @@ document.addEventListener('visibilitychange', () => {
 // ------------------------------------------------------------
 addEventListener('keydown', (e) => {
   if (e.code === 'Escape') {
-    if (state === 'playing') {
+    if (state === 'replay') {
+      exitReplay();
+    } else if (state === 'playing') {
       pauseGame();
     } else if (state === 'paused') {
       if (menu.menuVisible) {
@@ -305,9 +403,10 @@ function loop(now) {
     frames = 0; fpsTimer = 0;
   }
 
-  // Simulation nur, wenn die Maus gefangen ist - sonst steht das Spiel
+  // Simulation nur, wenn die Maus gefangen ist (oder Touch aktiv) - sonst steht das Spiel
   // (verhindert, dass man beim Klicken auf "Weiterspielen" getoetet wird).
-  const simulate = game && state === 'playing' && input.locked;
+  const hasControl = input.locked || input.virtualLock;
+  const simulate = game && state === 'playing' && hasControl;
 
   if (simulate) {
     input.enabled = true;
@@ -316,9 +415,6 @@ function loop(now) {
     game.readInput(dt);
 
     // ... danach die Physik in Teilschritten simulieren.
-    // Die Schrittzahl richtet sich nach der vergangenen Zeit, die Schrittweite
-    // wird gleichmaessig verteilt. So laeuft das Spiel auch bei wenigen
-    // Bildern pro Sekunde in Echtzeit weiter (kein Zeitlupeneffekt).
     acc += dt;
     if (acc > 0.0005) {
       const MAX_STEP = 1 / 90;
@@ -331,6 +427,11 @@ function loop(now) {
     // Kamera, Modelle, Effekte und HUD einmal pro Frame
     game.postUpdate(dt);
     input.endFrame();
+  } else if (game && state === 'replay' && game.replaying) {
+    input.enabled = hasControl;
+    game.replayUpdate(dt, input);
+    input.endFrame();
+    acc = 0;
   } else if (game) {
     input.enabled = false;
     input.endFrame();
@@ -382,7 +483,9 @@ window.__FRAGSTORM__ = {
   get game() { return game; },
   get state() { return state; },
   set state(s) { setState(s); },
-  input, hud, menu, settings,
+  get replayData() { return lastReplayData; },
+  startReplay, exitReplay,
+  input, hud, menu, settings, touch,
 };
 window.__KRUNKER__ = window.__FRAGSTORM__;
 

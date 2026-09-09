@@ -11,6 +11,8 @@ import { clamp, damp, lerp } from '../core/utils.js';
 import { mergeBoxes } from '../fx/geom.js';
 import { makePropMaterial, unregisterMaterial } from '../fx/materials.js';
 import { applySkin } from './skins.js';
+import { hatGeometry } from './cosmetics.js';
+import { buildStickerGroup } from './stickers.js';
 
 export const CHAR = {
   HEIGHT: 2.4,
@@ -70,27 +72,29 @@ function torsoGeo(body, accent) {
     { x: -0.22, y: 0.5, z: -C.DEPTH / 2 - 0.02, w: 0.16, h: 0.18, d: 0.05, color: M(darken(body, 0.75), 0, 0.8) },
   ], { chamfer: 0.03, defaults: CLOTH }));
 }
-function headGeo(skin, body) {
-  return cached('head|' + skin + '|' + body, () => mergeBoxes([
+/** Kopf: Haut, Sonnenbrille, Haaransatz, Kopfhoerer-Buegel. Kopfbedeckungen kommen als eigenes Mesh. */
+function headGeo(skin, hair) {
+  return cached('head|' + skin + '|' + hair, () => mergeBoxes([
     { x: 0, y: C.HEAD_H / 2, z: 0, w: C.HEAD_H, h: C.HEAD_H, d: C.HEAD_H, color: M(skin, 0, 0.62) },
     { x: 0, y: C.HEAD_H / 2 + 0.04, z: -C.HEAD_H / 2 - 0.02, w: C.HEAD_H * 0.72, h: C.HEAD_H * 0.3, d: 0.04, color: M(0x141618, 0.6, 0.15) },
-    { x: 0, y: C.HEAD_H - 0.02, z: 0, w: C.HEAD_H + 0.06, h: 0.16, d: C.HEAD_H + 0.06, color: M(body, 0, 0.8) },
-    { x: 0, y: C.HEAD_H - 0.06, z: -C.HEAD_H / 2 - 0.06, w: C.HEAD_H, h: 0.07, d: 0.24, color: M(body, 0, 0.8) },
+    { x: 0, y: C.HEAD_H - 0.05, z: 0.02, w: C.HEAD_H + 0.02, h: 0.11, d: C.HEAD_H - 0.02, color: M(hair, 0, 0.9) },
+    { x: 0, y: C.HEAD_H - 0.14, z: C.HEAD_H / 2 - 0.02, w: C.HEAD_H + 0.02, h: 0.2, d: 0.06, color: M(hair, 0, 0.9) },
     { x: C.HEAD_H / 2 + 0.01, y: C.HEAD_H / 2, z: 0.02, w: 0.05, h: 0.12, d: 0.12, color: M(0x1c1f26, 0.4, 0.5) },
     { x: -C.HEAD_H / 2 - 0.01, y: C.HEAD_H / 2, z: 0.02, w: 0.05, h: 0.12, d: 0.12, color: M(0x1c1f26, 0.4, 0.5) },
   ], { chamfer: 0.025, defaults: SKIN }));
 }
 const ARM_LEN = 0.80;
-function armGeo(body, skin) {
-  return cached('arm|' + body + '|' + skin, () => mergeBoxes([
-    { x: 0, y: 0, z: 0.29, w: 0.24, h: 0.26, d: 0.58, color: M(darken(body, 0.78), 0, 0.85) },
-    { x: 0, y: 0, z: 0.60, w: 0.22, h: 0.24, d: 0.06, color: M(0x2a3040, 0.1, 0.8) },
+function armGeo(body, skin, cuff, armCol) {
+  const ac = armCol || darken(body, 0.78);
+  return cached('arm|' + ac + '|' + skin + '|' + cuff, () => mergeBoxes([
+    { x: 0, y: 0, z: 0.29, w: 0.24, h: 0.26, d: 0.58, color: M(ac, 0, 0.85) },
+    { x: 0, y: 0, z: 0.60, w: 0.22, h: 0.24, d: 0.06, color: M(cuff, 0.1, 0.8) },
     { x: 0, y: 0, z: 0.72, w: 0.21, h: 0.22, d: 0.18, color: M(skin, 0, 0.62) },
   ], { chamfer: 0.025, defaults: CLOTH }));
 }
 function weaponGeo(weapon, skinId) {
   const sid = skinId || 'default';
-  return cached('wpn|' + weapon.id + '|' + sid, () => mergeBoxes(applySkin(weapon.parts || [], sid), { chamfer: 0.004 }));
+  return cached('wpn|' + (weapon.variant || weapon.id) + '|' + sid, () => mergeBoxes(applySkin(weapon.parts || [], sid), { chamfer: 0.004 }));
 }
 
 // Haltungen (Position der rechten Hand im Figurenraum, Rotation des Halters)
@@ -102,6 +106,7 @@ const POSE = {
   knife:    { pos: [0.50, 1.30, -0.30], rot: [1.15, 0.25, 0.10], follow: 0.2 },
   katana:   { pos: [0.32, 1.28, -0.36], rot: [1.25, 0.10, -0.20], follow: 0.2 },
   nade:     { pos: [0.48, 1.40, -0.30], rot: [0.00, 0.00, 0.00], follow: 0.3 },
+  bow:      { pos: [0.18, 1.56, -0.52], rot: [0.00, 0.10, -0.30], follow: 1.0 },
 };
 
 function swingCurve(t) {
@@ -127,38 +132,62 @@ const RAG_MAX = [[0, 3, 1.25], [0, 4, 1.25], [1, 5, 1.75], [1, 6, 1.75], [2, 5, 
 // Nametag
 // ------------------------------------------------------------
 class NameTag {
-  constructor() {
+  /** through: ohne Tiefentest (Marker fuer Mitspieler / Radar), mit Pfeil ueber dem Namen */
+  constructor(through) {
+    this.through = !!through;
     this.cv = document.createElement('canvas');
-    this.cv.width = 320; this.cv.height = 88;
+    this.cv.width = 320; this.cv.height = through ? 120 : 88;
     this.ctx = this.cv.getContext('2d');
     this.tex = new THREE.CanvasTexture(this.cv);
     this.tex.colorSpace = THREE.SRGBColorSpace;
     this.mat = new THREE.SpriteMaterial({
-      map: this.tex, transparent: true, depthTest: true, depthWrite: false,
+      map: this.tex, transparent: true, depthTest: !through, depthWrite: false,
       sizeAttenuation: true, toneMapped: false,
     });
     this.sprite = new THREE.Sprite(this.mat);
-    this.sprite.scale.set(3.0, 0.82, 1);
-    this.sprite.renderOrder = 20;
+    this.sprite.scale.set(3.0, through ? 1.12 : 0.82, 1);
+    this.sprite.renderOrder = through ? 25 : 20;
     this._key = '';
   }
 
-  draw(name, hpFrac, colorHex, isEnemy) {
-    const key = name + '|' + Math.round(hpFrac * 24) + '|' + colorHex;
+  /** kind: 'friend' (Chevron + Name + HP) | 'enemy' (rotes Dreieck, Radar) | undefined (normales Schild) */
+  draw(name, hpFrac, colorHex, isEnemy, kind) {
+    const key = name + '|' + Math.round(hpFrac * 24) + '|' + colorHex + '|' + (kind || '');
     if (key === this._key) return;
     this._key = key;
     const g = this.ctx;
     const W = this.cv.width, H = this.cv.height;
     g.clearRect(0, 0, W, H);
+    let y0 = 26;
+    if (this.through) {
+      // Pfeil (Chevron) ueber dem Namen
+      g.fillStyle = colorHex;
+      g.strokeStyle = 'rgba(0,0,0,0.85)';
+      g.lineWidth = 5;
+      g.lineJoin = 'round';
+      g.beginPath();
+      g.moveTo(W / 2 - 22, 8); g.lineTo(W / 2 + 22, 8); g.lineTo(W / 2, 32); g.closePath();
+      g.stroke(); g.fill();
+      y0 = 58;
+      if (kind === 'enemy') {
+        // Radar-Marker: nur Dreieck mit Ausrufezeichen, kein Name
+        g.fillStyle = '#fff';
+        g.font = 'bold 22px Rajdhani, Segoe UI, sans-serif';
+        g.textAlign = 'center'; g.textBaseline = 'middle';
+        g.fillText('!', W / 2, 17);
+        this.tex.needsUpdate = true;
+        return;
+      }
+    }
     g.font = 'bold 34px Rajdhani, Segoe UI, sans-serif';
     g.textAlign = 'center';
     g.textBaseline = 'middle';
     g.lineWidth = 6;
     g.strokeStyle = 'rgba(0,0,0,0.85)';
-    g.strokeText(name, W / 2, 26);
+    g.strokeText(name, W / 2, y0);
     g.fillStyle = colorHex;
-    g.fillText(name, W / 2, 26);
-    const bw = 190, bh = 12, bx = (W - bw) / 2, by = 54;
+    g.fillText(name, W / 2, y0);
+    const bw = 190, bh = 12, bx = (W - bw) / 2, by = y0 + 28;
     g.fillStyle = 'rgba(0,0,0,0.7)';
     g.fillRect(bx - 2, by - 2, bw + 4, bh + 4);
     const f = clamp(hpFrac, 0, 1);
@@ -170,16 +199,23 @@ class NameTag {
   }
 }
 
-/** Waffenmodell (ein Mesh, fuer Weltansicht) */
-export function buildWeaponMesh(weapon, scale, material, skinId) {
+/** Waffenmodell (ein Mesh, fuer Weltansicht), optional mit Sticker */
+export function buildWeaponMesh(weapon, scale, material, skinId, stickerId) {
   const m = new THREE.Mesh(weaponGeo(weapon, skinId), material);
   m.castShadow = true;
   m.scale.setScalar(scale || 1);
+  const st = buildStickerGroup(weapon, stickerId);
+  if (st) m.add(st);
   return m;
 }
 
 // ------------------------------------------------------------
 export class CharacterModel {
+  /**
+   * opts: color (Rumpf), accent (Schulterband), pants, skin (Hautton),
+   *       hair, cuff (Aermelbund), hat (Id), hatPrimary, hatSecondary,
+   *       world, effects
+   */
   constructor(scene, opts) {
     this.scene = scene;
     this.opts = opts;
@@ -190,6 +226,8 @@ export class CharacterModel {
     const body = opts.color || 0x3366cc;
     const pants = opts.pants || 0x2a3040;
     const shoe = 0x15171c;
+    const hair = opts.hair || 0x2a1e14;
+    const cuff = opts.cuff || 0x2a3040;
 
     this.mat = makePropMaterial();
     this.flashT = 0;
@@ -212,12 +250,21 @@ export class CharacterModel {
     this.neck = new THREE.Group();
     this.neck.position.set(0, C.LEG_H + C.TORSO_H, 0);
     this.pivot.add(this.neck);
-    this.head = new THREE.Mesh(headGeo(skin, body), this.mat);
+    this.head = new THREE.Mesh(headGeo(skin, hair), this.mat);
     this.neck.add(this.head);
 
+    // Kopfbedeckung (haengt am Hals -> folgt Kopf und Ragdoll)
+    this.hatMesh = null;
+    const hatGeo = hatGeometry(opts.hat || 'none', opts.hatPrimary || body, opts.hatSecondary || (opts.accent || 0xffffff));
+    if (hatGeo) {
+      this.hatMesh = new THREE.Mesh(hatGeo, this.mat);
+      this.hatMesh.castShadow = true;
+      this.neck.add(this.hatMesh);
+    }
+
     this.shoulderY = C.LEG_H + C.TORSO_H - 0.10;
-    this.armL = new THREE.Mesh(armGeo(body, skin), this.mat);
-    this.armR = new THREE.Mesh(armGeo(body, skin), this.mat);
+    this.armL = new THREE.Mesh(armGeo(body, skin, cuff, opts.arm), this.mat);
+    this.armR = new THREE.Mesh(armGeo(body, skin, cuff, opts.arm), this.mat);
     this.armL.position.set(-(C.SHOULDER / 2 + 0.12), this.shoulderY, 0);
     this.armR.position.set(C.SHOULDER / 2 + 0.12, this.shoulderY, 0);
     this.pivot.add(this.armL, this.armR);
@@ -227,6 +274,7 @@ export class CharacterModel {
     this.weaponMesh = null;
     this.currentWeapon = null;
     this.currentSkin = 'default';
+    this.currentSticker = 'none';
     this.pose = POSE.rifle;
 
     for (const m of [this.legL, this.legR, this.torso, this.head, this.armL, this.armR]) {
@@ -237,6 +285,11 @@ export class CharacterModel {
     this.tag = new NameTag();
     this.tag.sprite.position.set(0, C.HEIGHT + 0.62, 0);
     this.root.add(this.tag.sprite);
+    // Marker fuer Mitspieler/Radar: durch Waende sichtbar (kein Tiefentest)
+    this.marker = new NameTag(true);
+    this.marker.sprite.position.set(0, C.HEIGHT + 0.62, 0);
+    this.marker.sprite.visible = false;
+    this.root.add(this.marker.sprite);
 
     scene.add(this.root);
 
@@ -260,13 +313,15 @@ export class CharacterModel {
     this._handL = new THREE.Vector3();
   }
 
-  setWeapon(weapon, skinId) {
+  setWeapon(weapon, skinId, stickerId) {
     const sid = skinId || 'default';
-    if (this.weaponMesh && this.currentWeapon === weapon && this.currentSkin === sid) return;
+    const st = stickerId || 'none';
+    if (this.weaponMesh && this.currentWeapon === weapon && this.currentSkin === sid && this.currentSticker === st) return;
     if (this.weaponMesh) this.weaponHolder.remove(this.weaponMesh);
-    this.weaponMesh = buildWeaponMesh(weapon, 0.9, this.mat, sid);
+    this.weaponMesh = buildWeaponMesh(weapon, 0.9, this.mat, sid, st);
     this.currentWeapon = weapon;
     this.currentSkin = sid;
+    this.currentSticker = st;
     this.pose = POSE[weapon.hold] || POSE.rifle;
     const g = (weapon.grips && weapon.grips.r) || [0, 0, 0];
     this.weaponMesh.position.set(-g[0] * 0.9, -g[1] * 0.9, -g[2] * 0.9);
@@ -290,7 +345,7 @@ export class CharacterModel {
     this.root.visible = v;
   }
 
-  setTagVisible(v) { this.tag.sprite.visible = v; }
+  setTagVisible(v) { this.tag.sprite.visible = v; this.marker.sprite.visible = false; }
 
   triggerRecoil(amount) { this.recoilT = Math.min(1, this.recoilT + (amount || 0.6)); }
 
@@ -354,6 +409,7 @@ export class CharacterModel {
     this.pivot.scale.set(1, 1, 1);
     this.root.rotation.set(0, 0, 0);
     this.tag.sprite.visible = false;
+    this.marker.sprite.visible = false;
   }
 
   _ragStep(dt) {
@@ -515,6 +571,7 @@ export class CharacterModel {
     if (s.dead) {
       this.deathT += dt;
       this.tag.sprite.visible = false;
+      this.marker.sprite.visible = false;
       if (this.rag) {
         this._ragStep(dt);
         this._poseRagdoll();
@@ -571,6 +628,23 @@ export class CharacterModel {
     }
     // Wandlauf: Koerper neigt sich von der Wand weg
     this.pivot.rotation.z = damp(this.pivot.rotation.z, s.wallrun ? s.wallrun * 0.35 : 0, 10, dt);
+
+    // ---- Seilbahn: beide Haende oben am Griff, Beine haengen ----
+    if (s.zipline) {
+      this.legL.rotation.x = lerp(this.legL.rotation.x, 0.25, 0.4);
+      this.legR.rotation.x = lerp(this.legR.rotation.x, 0.35, 0.4);
+      this._handR.set(0.22, C.HEIGHT + 0.35, 0.05);
+      this._handL.set(-0.22, C.HEIGHT + 0.35, 0.05);
+      this._aimArm(this.armR, this._handR);
+      this._aimArm(this.armL, this._handL);
+      this.weaponHolder.position.set(0.35, 1.05, -0.1);
+      this.weaponHolder.rotation.set(1.2, 0, 0.3);
+      this.armL.position.y = this.shoulderY - bodyDip;
+      this.armR.position.y = this.armL.position.y;
+      this.recoilT = 0;
+      this._finishTag(s, camPos);
+      return;
+    }
 
     // ---- Waffe halten ----
     this.recoilT = damp(this.recoilT, 0, 12, dt);
@@ -658,18 +732,40 @@ export class CharacterModel {
     }
     this.armL.position.y = this.shoulderY - bodyDip;
     this.armR.position.y = this.armL.position.y;
+    this._finishTag(s, camPos);
+  }
 
-    if (s.showTag !== false) {
+  /** Namensschild / Marker / Emissive-Zustaende (Abschluss von update) */
+  _finishTag(s, camPos) {
+    // Namensschild (mit Tiefentest) bzw. Marker durch Waende:
+    //  marker = 'friend': Mitspieler -> Chevron + Name + HP, immer sichtbar
+    //  marker = 'enemy':  Radar (UAV) -> rotes Dreieck
+    const tagY = C.HEIGHT * (1 - this.crouchT * (1 - C.CROUCH_SCALE)) + 0.55;
+    const d = camPos ? Math.hypot(camPos.x - s.x, camPos.y - s.y, camPos.z - s.z) : 10;
+    const sc = clamp(d * 0.055, 0.9, 3.4);
+    if (s.marker && s.showTag !== false) {
+      this.tag.sprite.visible = false;
+      this.marker.sprite.visible = true;
+      this.marker.draw(s.name, s.hp / s.maxHp, s.tagColor || '#ffffff', s.enemy, s.marker);
+      const ms = s.marker === 'enemy' ? clamp(d * 0.05, 0.9, 3.0) : sc;
+      this.marker.sprite.scale.set(ms * 1.15, ms * 0.42, 1);
+      this.marker.sprite.position.y = tagY + 0.15;
+    } else if (s.showTag !== false) {
+      this.marker.sprite.visible = false;
       this.tag.sprite.visible = true;
       this.tag.draw(s.name, s.hp / s.maxHp, s.tagColor || '#ffffff', s.enemy);
-      if (camPos) {
-        const d = Math.hypot(camPos.x - s.x, camPos.y - s.y, camPos.z - s.z);
-        const sc = clamp(d * 0.055, 0.9, 3.4);
-        this.tag.sprite.scale.set(sc * 1.15, sc * 0.31, 1);
-        this.tag.sprite.position.y = C.HEIGHT * (1 - this.crouchT * (1 - C.CROUCH_SCALE)) + 0.55;
-      }
+      this.tag.sprite.scale.set(sc * 1.15, sc * 0.31, 1);
+      this.tag.sprite.position.y = tagY;
     } else {
       this.tag.sprite.visible = false;
+      this.marker.sprite.visible = false;
+    }
+
+    // Brennen / Schild: Emissive-Tint
+    if (s.burning) {
+      this.mat.emissive.setRGB(0.9, 0.35, 0.05).multiplyScalar(0.35 + Math.sin(performance.now() * 0.02) * 0.15);
+    } else if (s.shield) {
+      this.mat.emissive.setRGB(0.2, 0.5, 1.0).multiplyScalar(0.25);
     }
   }
 
@@ -679,5 +775,7 @@ export class CharacterModel {
     this.mat.dispose();
     this.tag.tex.dispose();
     this.tag.mat.dispose();
+    this.marker.tex.dispose();
+    this.marker.mat.dispose();
   }
 }

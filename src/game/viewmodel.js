@@ -15,6 +15,7 @@ import { settings } from '../core/settings.js';
 import { mergeBoxes } from '../fx/geom.js';
 import { makePropMaterial } from '../fx/materials.js';
 import { applySkin } from './skins.js';
+import { buildStickerGroup } from './stickers.js';
 
 const VM_SCALE = 0.53;
 const MELEE_SCALE = 0.80;
@@ -22,7 +23,7 @@ const MELEE_SCALE = 0.80;
 const HIP_POS = {
   rifle: [0.185, -0.155, -0.72], pistol: [0.145, -0.15, -0.62], akimbo: [0.0, -0.2, -0.62],
   launcher: [0.21, -0.13, -0.62], knife: [0.30, -0.31, -0.52], katana: [0.30, -0.40, -0.58],
-  nade: [0.2, -0.2, -0.5],
+  nade: [0.2, -0.2, -0.5], bow: [0.14, -0.20, -0.62],
 };
 const ADS_Z = -0.74;
 
@@ -164,6 +165,10 @@ export class ViewModel {
     this.armR = null;
     this.armL = null;
     this.skin = 0;
+    this.sleeve = 0x3b4152;       // Aermelfarbe (Outfit)
+    this.cuff = 0x2a3040;
+    this._armsDirty = false;
+    this.stickerId = 'none';
 
     // Muendungsfeuer + Licht
     const flashGeo = new THREE.PlaneGeometry(1, 1);
@@ -210,6 +215,9 @@ export class ViewModel {
     this.inspectK = 0;
     this.inspectLoop = -1;
     this.dashK = 0;
+    this.charge = 0;              // Bogen gespannt (0..1)
+    this.arrow = null;            // Pfeil-Mesh (Bogen)
+    this.hideT = 0;               // Waffe kurz unsichtbar (Wurfmesser geworfen)
 
     this._basePos = new THREE.Vector3();
     this._adsPos = new THREE.Vector3();
@@ -220,12 +228,14 @@ export class ViewModel {
 
   _buildArm(skin) {
     const g = new THREE.Group();
+    const sleeveCol = this.sleeve || 0x3b4152;
+    const cuff = this.cuff || 0x2a3040;
     const geo = mergeBoxes([
       { x: 0, y: 0, z: 0.0, w: 0.085, h: 0.095, d: 0.13, color: { c: skin, m: 0, r: 0.62 } },
-      { x: 0, y: 0, z: 0.10, w: 0.10, h: 0.10, d: 0.05, color: { c: 0x2a3040, m: 0.1, r: 0.8 } },
+      { x: 0, y: 0, z: 0.10, w: 0.10, h: 0.10, d: 0.05, color: { c: cuff, m: 0.1, r: 0.8 } },
     ], { chamfer: 0.012 });
     const hand = new THREE.Mesh(geo, this.mat);
-    const sleeveGeo = mergeBoxes([{ x: 0, y: 0, z: 0.5, w: 0.09, h: 0.09, d: 1.0, color: { c: 0x3b4152, m: 0, r: 0.88 } }], { chamfer: 0.012 });
+    const sleeveGeo = mergeBoxes([{ x: 0, y: 0, z: 0.5, w: 0.09, h: 0.09, d: 1.0, color: { c: sleeveCol, m: 0, r: 0.88 } }], { chamfer: 0.012 });
     const sleeve = new THREE.Mesh(sleeveGeo, this.mat);
     sleeve.position.z = 0.1;
     g.add(hand, sleeve);
@@ -234,23 +244,34 @@ export class ViewModel {
     return g;
   }
 
-  setWeapon(weapon, skinColor, skinId) {
+  /** Aermel-/Bundfarbe der Egoansicht (Outfit); Arme werden beim naechsten setWeapon neu gebaut */
+  setOutfit(sleeve, cuff) {
+    const s = sleeve || 0x3b4152, c = cuff || 0x2a3040;
+    if (s === this.sleeve && c === this.cuff) return;
+    this.sleeve = s; this.cuff = c;
+    this._armsDirty = true;
+  }
+
+  setWeapon(weapon, skinColor, skinId, stickerId) {
     if (this.mesh) {
       this.root.remove(this.mesh);
+      if (this.arrow) { this.arrow.geometry.dispose(); this.arrow = null; }
       this.mesh.geometry.dispose();
       this.mesh = null;
     }
     this.skinId = skinId || 'default';
+    this.stickerId = stickerId || 'none';
     this.inspectT = 0;
     this.inspectK = 0;
     this.inspectLoop = -1;
     const skin = skinColor || 0xe0b090;
-    if (!this.armR || this.skin !== skin) {
+    if (!this.armR || this.skin !== skin || this._armsDirty) {
       if (this.armR) {
         this.root.remove(this.armR, this.armL);
         for (const a of [this.armR, this.armL]) a.userData.geos.forEach(g => g.dispose());
       }
       this.skin = skin;
+      this._armsDirty = false;
       this.armR = this._buildArm(skin);
       this.armL = this._buildArm(skin);
       this.root.add(this.armR, this.armL);
@@ -258,8 +279,20 @@ export class ViewModel {
 
     this.weapon = weapon;
     this.mesh = new THREE.Mesh(mergeBoxes(applySkin(weapon.parts || [], this.skinId), { chamfer: 0.0045 }), this.mat);
-    this.mesh.scale.setScalar(weapon.melee ? VM_SCALE * MELEE_SCALE : VM_SCALE);
+    this.mesh.scale.setScalar((weapon.melee ? VM_SCALE * MELEE_SCALE : VM_SCALE) * (weapon.vmScale || 1));
+    const st = buildStickerGroup(weapon, this.stickerId);
+    if (st) this.mesh.add(st);
     this.root.add(this.mesh);
+    this.mesh.visible = true;
+    this.hideT = 0;
+    this.charge = 0;
+
+    // Pfeil (Bogen): eigenes Mesh, wird beim Spannen mit der Sehne zurueckgezogen
+    this.arrow = null;
+    if (weapon.arrowParts) {
+      this.arrow = new THREE.Mesh(mergeBoxes(applySkin(weapon.arrowParts, this.skinId), { chamfer: 0.003 }), this.mat);
+      this.mesh.add(this.arrow);
+    }
 
     const hold = weapon.hold || 'rifle';
     const vp = weapon.vmPos || HIP_POS[hold] || HIP_POS.rifle;
@@ -296,7 +329,8 @@ export class ViewModel {
     this.recoilRot = Math.min(0.5, this.recoilRot + 0.07 * s * k * 0.55);
     this.recoilRoll += rand(-0.04, 0.04) * s;
 
-    if (w && !w.melee && !w.projectile) this._showFlash(rand(0.22, 0.36));
+    if (w && w.suppressed) { /* kein Muendungsfeuer */ }
+    else if (w && !w.melee && !w.projectile) this._showFlash(rand(0.22, 0.36));
     else if (w && w.projectile && w.id !== 'grenade') this._showFlash(rand(0.32, 0.5));
   }
 
@@ -327,6 +361,13 @@ export class ViewModel {
 
   /** Dash: Waffe zuckt kurz zurueck */
   dash() { this.dashK = 1; }
+
+  /** Wurfmesser: Wurfanimation, danach ist die Hand kurz leer, dann Flip mit dem naechsten Messer */
+  throwKnife(reloadDur) {
+    this.melee('throw', 0.32);
+    this.hideT = 0.2;
+    this._rearmDur = Math.max(0.2, reloadDur || 0.4);
+  }
 
   _showFlash(scale) {
     this.flash.visible = true;
@@ -419,6 +460,27 @@ export class ViewModel {
     if (this.switchT > 0) this.switchT = Math.max(0, this.switchT - dt);
     if (this.swingT > 0) this.swingT = Math.max(0, this.swingT - dt);
 
+    // Geworfenes Messer: Hand kurz leer, dann neues Messer mit Flip
+    if (this.hideT > 0) {
+      this.hideT -= dt;
+      if (this.swingT <= 0.12) this.mesh.visible = false;
+      if (this.hideT <= 0) {
+        this.mesh.visible = true;
+        this.swingT = 0;
+        this.equipKind = 'flip';
+        this.startSwitch(this._rearmDur || 0.4);
+      }
+    }
+
+    // Bogen spannen: linke Hand zieht die Sehne, Pfeil wandert mit
+    const chargeTarget = w.charge ? clamp(s.charge || 0, 0, 1) : 0;
+    this.charge = damp(this.charge, chargeTarget, chargeTarget > this.charge ? 14 : 30, dt);
+    if (this.arrow) {
+      const pull = w.pull ? (w.pull[2] - (w.grips.l ? w.grips.l[2] : 0)) : 0.45;
+      this.arrow.position.z = this.charge * pull;
+      this.arrow.visible = this.charge > 0.02 || (s.arrowReady !== false);
+    }
+
     // ---- Zielposition zusammensetzen ----
     const p = this._tmp;
     p.copy(this._basePos).lerp(this._adsPos, adsK);
@@ -492,6 +554,15 @@ export class ViewModel {
       rx += curve(t, sw.rx); ry += curve(t, sw.ry); rz += curve(t, sw.rz);
     }
 
+    // Bogen: beim Spannen zieht die Waffe leicht zur Mitte und kippt
+    if (this.charge > 0.001) {
+      const c = this.charge;
+      p.x -= c * 0.05; p.z -= c * 0.03; p.y += c * 0.02;
+      rx += c * 0.03; rz -= c * 0.08;
+      // Zittern bei voller Spannung
+      if (c > 0.9) { rx += Math.sin(this.time * 31) * 0.004; ry += Math.cos(this.time * 27) * 0.003; }
+    }
+
     // Dash: Waffe wird kurz nach hinten/unten gerissen
     if (this.dashK > 0.001) {
       this.dashK = damp(this.dashK, 0, 7, dt);
@@ -547,6 +618,12 @@ export class ViewModel {
     }
     if (gl) {
       this._hand.set(gl[0], gl[1], gl[2]);
+      if (w.pull && this.charge > 0.001) {
+        // Linke Hand zieht die Sehne zurueck
+        this._hand.x = lerp(gl[0], w.pull[0], this.charge);
+        this._hand.y = lerp(gl[1], w.pull[1], this.charge);
+        this._hand.z = lerp(gl[2], w.pull[2], this.charge);
+      }
       const mp = MAG_POINT[hold];
       if (magK > 0 && mp) {
         this._hand.x = lerp(this._hand.x, mp[0], magK);
@@ -581,6 +658,7 @@ export class ViewModel {
   }
 
   dispose() {
+    if (this.arrow) this.arrow.geometry.dispose();
     if (this.mesh) this.mesh.geometry.dispose();
     for (const a of [this.armR, this.armL]) if (a) a.userData.geos.forEach(g => g.dispose());
     this.scene.remove(this.root);

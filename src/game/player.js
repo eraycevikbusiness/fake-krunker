@@ -6,9 +6,12 @@
 import * as THREE from 'three';
 import { Actor, PHYS } from './actor.js';
 import { settings } from '../core/settings.js';
-import { clamp, damp, lerp, rand } from '../core/utils.js';
+import { clamp, damp, lerp, rand, angleDelta, deg } from '../core/utils.js';
 
 const PITCH_LIMIT = Math.PI / 2 - 0.015;
+
+// Zielhilfe: [Staerke, Kegel in Grad]
+const AIM_ASSIST = { low: [0.45, 3.4], mid: [0.75, 4.8], high: [1.0, 6.4] };
 
 export class LocalPlayer extends Actor {
   constructor(game, opts) {
@@ -42,6 +45,8 @@ export class LocalPlayer extends Actor {
     this.lookDX = 0;
     this.lookDY = 0;
     this.fHold = 0;
+    this.assistTarget = null;     // aktuelles Ziel der Zielhilfe (Debug/HUD)
+    this._assist = { ang: 0, dyaw: 0, dpitch: 0 };
 
     this.deathCamT = 0;
     this.deathYaw = 0;
@@ -108,6 +113,24 @@ export class LocalPlayer extends Actor {
     this.lookDX = damp(this.lookDX, dx / Math.max(dt, 0.001) * 0.001, 20, dt);
     this.lookDY = damp(this.lookDY, dy / Math.max(dt, 0.001) * 0.001, 20, dt);
 
+    // ---------- Zielhilfe ----------
+    // Reibung: nahe am Gegner wird die Maus langsamer. Magnetismus: bei
+    // Mausbewegung zieht die Blickrichtung leicht zum Ziel (nie von selbst).
+    this.assistTarget = null;
+    const aa = AIM_ASSIST[settings.aimAssist];
+    if (aa && this.alive) {
+      const cone = deg(aa[1]);
+      const tgt = this._findAssistTarget(cone);
+      if (tgt) {
+        const w = 1 - tgt.ang / cone;
+        sens *= 1 - aa[0] * 0.42 * w;
+        const mv = clamp((Math.abs(dx) + Math.abs(dy)) / 12, 0, 1);
+        const pull = clamp(aa[0] * 0.075 * w * mv * clamp(dt * 60, 0, 2), 0, 0.5);
+        this.yaw += tgt.dyaw * pull;
+        this.pitch += tgt.dpitch * pull;
+      }
+    }
+
     if (this.alive) {
       this.yaw -= dx * sens;
       this.pitch -= dy * sens;
@@ -154,9 +177,16 @@ export class LocalPlayer extends Actor {
       return;
     }
 
-    // ---------- Tastatur ----------
-    const f = (input.down('KeyW') || input.down('ArrowUp') ? 1 : 0) - (input.down('KeyS') || input.down('ArrowDown') ? 1 : 0);
-    const s = (input.down('KeyD') || input.down('ArrowRight') ? 1 : 0) - (input.down('KeyA') || input.down('ArrowLeft') ? 1 : 0);
+    // ---------- Tastatur (+ Touch-Joystick analog) ----------
+    let f = (input.down('KeyW') || input.down('ArrowUp') ? 1 : 0) - (input.down('KeyS') || input.down('ArrowDown') ? 1 : 0);
+    let s = (input.down('KeyD') || input.down('ArrowRight') ? 1 : 0) - (input.down('KeyA') || input.down('ArrowLeft') ? 1 : 0);
+    const tm = input.touchMove;
+    let touchSprint = false;
+    if (tm && (tm.x !== 0 || tm.y !== 0)) {
+      f = clamp(f + tm.y, -1, 1);
+      s = clamp(s + tm.x, -1, 1);
+      touchSprint = Math.hypot(tm.x, tm.y) > 0.92 && tm.y > 0.4;
+    }
     it.fwd = f;
     it.side = s;
 
@@ -165,7 +195,7 @@ export class LocalPlayer extends Actor {
     it.autoJump = !!settings.autoJump;
 
     // Sprint: halten / umschalten / immer
-    const shift = input.down('ShiftLeft') || input.down('ShiftRight');
+    const shift = input.down('ShiftLeft') || input.down('ShiftRight') || touchSprint;
     if (settings.sprintMode === 'always') it.sprint = true;
     else if (settings.sprintMode === 'toggle') {
       if (input.justDown('ShiftLeft') || input.justDown('ShiftRight')) this.sprintToggleState = !this.sprintToggleState;
@@ -199,7 +229,14 @@ export class LocalPlayer extends Actor {
     it.fire = input.mouseDown(0);
     if (input.justDown('KeyR')) it.reload = true;
     if (input.justDown('KeyG')) it.nade = true;
-    if (input.justDown('KeyE')) it.dash = true;
+    // E: Interaktion (Seilbahn, Waffe aufheben, Bombe), sonst Dash
+    if (input.justDown('KeyE')) {
+      if (this.game.interactionFor && this.game.interactionFor(this)) it.interact = true;
+      else it.dash = true;
+    }
+    it.interactHold = input.down('KeyE');
+    if (input.justDown('Digit4')) it.airstrike = true;
+    if (input.justDown('KeyX') || input.mouseJust(1)) it.grapple = true;
 
     // F: kurz tippen = Nahkampfschlag, halten = Waffe inspizieren
     if (input.justDown('KeyF')) this.fHold = 0.0001;
@@ -231,6 +268,48 @@ export class LocalPlayer extends Actor {
       this.thirdPerson = !this.thirdPerson;
       settings.thirdPerson = this.thirdPerson;
     }
+  }
+
+  /**
+   * Naechstes Ziel im Kegel (Gegner oder Trainings-Zielscheibe) mit freier
+   * Sicht. Rueckgabe {ang, dyaw, dpitch} oder null.
+   */
+  _findAssistTarget(cone) {
+    const g = this.game;
+    if (!g || !g.world) return null;
+    const eye = this.eyePos(this._v);
+    const dir = this.lookDir(this._v2);
+    let best = null, bestAng = cone;
+    let bx = 0, by = 0, bz = 0;
+    const consider = (x, y, z, maxDist) => {
+      const tx = x - eye.x, ty = y - eye.y, tz = z - eye.z;
+      const len = Math.sqrt(tx * tx + ty * ty + tz * tz);
+      if (len < 1.5 || len > maxDist) return;
+      const dot = (tx * dir.x + ty * dir.y + tz * dir.z) / len;
+      if (dot < 0.9) return;
+      const ang = Math.acos(clamp(dot, -1, 1));
+      if (ang >= bestAng) return;
+      bestAng = ang; best = true; bx = x; by = y; bz = z;
+    };
+    for (const a of g.actors) {
+      if (a === this || !a.alive || a.spawnProtect > 0 || g.sameTeam(a, this)) continue;
+      consider(a.pos.x, a.pos.y + a.height * 0.62, a.pos.z, 90);
+    }
+    if (g.training) {
+      for (const t of g.training.targets) if (t.active) consider(t.x, t.y, t.z, 120);
+    }
+    if (!best) return null;
+    if (!g.world.losClear(eye.x, eye.y, eye.z, bx, by, bz)) return null;
+    const tx = bx - eye.x, ty = by - eye.y, tz = bz - eye.z;
+    const horiz = Math.max(1e-4, Math.hypot(tx, tz));
+    const yawTo = Math.atan2(-tx, -tz);
+    const pitchTo = Math.atan2(ty, horiz);
+    const r = this._assist;
+    r.ang = bestAng;
+    r.dyaw = angleDelta(this.yaw, yawTo);
+    r.dpitch = pitchTo - this.pitch;
+    this.assistTarget = r;
+    return r;
   }
 
   // --------------------------------------------------------

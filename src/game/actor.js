@@ -8,7 +8,7 @@
 // ============================================================
 
 import { clamp, damp } from '../core/utils.js';
-import { WEAPONS, CLASS_BY_ID, fireDelay } from './weapons.js';
+import { WEAPONS, CLASS_BY_ID, fireDelay, applyAttachments } from './weapons.js';
 import { CHAR } from './character.js';
 
 export const PHYS = {
@@ -62,6 +62,17 @@ export const PHYS = {
   WALLRUN_MIN_SPEED: 5.5,
   WALLRUN_GRAVITY: 0.22,        // Anteil der Schwerkraft waehrend des Wandlaufs
   WALLJUMP_OUT: 8.5,
+
+  GRAPPLE_RANGE: 48,            // Klassen-Perk: Enterhaken (Taste X / mittlere Maustaste)
+  GRAPPLE_ACCEL: 64,
+  GRAPPLE_MAX: 31,
+  GRAPPLE_MIN: 2.4,
+  GRAPPLE_TIME: 4.5,
+  GRAPPLE_COOLDOWN: 3.0,
+  GRAPPLE_GRAVITY: 0.3,
+
+  ZIP_SPEED: 19,                // Seilbahn
+  ZIP_HANG: 1.95,               // Abstand Fuesse -> Seil
 };
 
 // Trefferzonen im lokalen Raum (x rechts, y hoch, -z vorn), volle Hoehe.
@@ -107,14 +118,20 @@ export class Actor {
     this.airTime = 0;
     this.surface = 'stone';
 
-    // Klassen-Perks: Dash und Wandlauf
+    // Klassen-Perks: Dash, Wandlauf, Enterhaken
     this.canDash = false;
     this.canWallrun = false;
+    this.canGrapple = false;
     this.dashT = 0;
     this.dashCooldown = 0;
     this.wallrun = null;          // { nx, nz } Wandnormale waehrend des Wandlaufs
     this.wallrunT = 0;
     this.wallrunCooldown = 0;
+    this.grapple = null;          // { x, y, z } Ankerpunkt des Seils
+    this.grappleT = 0;
+    this.grappleCooldown = 0;
+    this.zip = null;              // { def, t, dir } auf einer Seilbahn
+    this.zipCooldown = 0;
 
     this.alive = false;
     this.hp = 100;
@@ -159,12 +176,47 @@ export class Actor {
       fwd: 0, side: 0, jump: false, jumpPressed: false, autoJump: false,
       crouch: false, sprint: false, fire: false, ads: false,
       reload: false, nade: false, melee: false, switchTo: -1,
-      dash: false, inspect: false,
+      dash: false, inspect: false, airstrike: false,
+      grapple: false, interact: false, interactHold: false,
     };
+
+    // Sonderwaffen: Bogen spannen, Minigun anlaufen, Brandschaden
+    this.chargeT = 0;
+    this.spinT = 0;
+    this.burnT = 0;
+    this.burnTick = 0;
+    this.burnFrom = null;
+    // Modi / Killstreaks
+    this.carryMult = 1;           // Tempo-Faktor (Flaggentraeger)
+    this.carrying = null;         // Flagge in der Hand (CTF)
+    this.shield = 0;              // Killstreak-Schild (absorbiert Schaden vor der Ruestung)
+    this.shieldT = 0;
+    this.uavUntil = -1;           // Killstreak-Radar aktiv bis
+    this.airstrikes = 0;          // verfuegbare Luftschlaege
+    this.ggLevel = 0;             // Gun-Game-Stufe
+    this.loadout = null;          // feste Waffenliste (Gun Game) statt Klassenwaffen
 
     this.model = null;
     this._hit = { t: 0, zone: 'body' };
+    this.attachments = opts.attachments || {};   // weaponId -> [attachmentIds]
     this.setClass(opts.classId || 'triggerman');
+  }
+
+  /** Aufsaetze neu anwenden (nach Aenderung im Menue), Munition bleibt */
+  refreshAttachments() {
+    for (const s of this.slots) {
+      const base = s.w.base || s.w;
+      const nw = this._weaponFor(base);
+      if (nw === s.w) continue;
+      const ratio = s.w.mag === Infinity ? 1 : Math.min(1, s.mag / Math.max(1, s.w.mag));
+      s.w = nw;
+      if (nw.mag !== Infinity) { s.mag = Math.round(nw.mag * ratio); s.reserve = Math.min(s.reserve, nw.reserve); }
+    }
+  }
+
+  _weaponFor(w) {
+    const ids = this.attachments && this.attachments[w.id];
+    return ids && ids.length ? applyAttachments(w, ids) : w;
   }
 
   // --------------------------------------------------------
@@ -178,6 +230,8 @@ export class Actor {
     this.maxJumps = cls.jumps;
     this.canDash = !!cls.dash;
     this.canWallrun = !!cls.wallrun;
+    this.canGrapple = !!cls.grapple;
+    if (this.loadout) { this._applyLoadout(); return; }
     this.slots = [
       this._mkSlot(WEAPONS[cls.primary]),
       this._mkSlot(WEAPONS[cls.secondary]),
@@ -187,7 +241,27 @@ export class Actor {
     this.lastSlot = 1;
   }
 
-  _mkSlot(w) {
+  /** Feste Waffenliste (Gun Game): null = Klassenwaffen */
+  setLoadout(ids) {
+    this.loadout = ids && ids.length ? ids.slice() : null;
+    if (this.loadout) this._applyLoadout();
+    else this.setClass(this.classDef.id);
+  }
+
+  _applyLoadout() {
+    this.slots = this.loadout.map(id => this._mkSlot(WEAPONS[id] || WEAPONS.pistol));
+    this.slot = 0;
+    this.lastSlot = Math.min(1, this.slots.length - 1);
+    this.switchTimer = 0;
+    this.reloadTimer = 0;
+    this.burstLeft = 0;
+    this.chargeT = 0;
+    this.spinT = 0;
+    this.adsAmount = 0;
+  }
+
+  _mkSlot(base) {
+    const w = this._weaponFor(base);
     return { w, mag: w.mag === Infinity ? Infinity : w.mag, reserve: w.reserve, pendingSingle: 0 };
   }
 
@@ -221,6 +295,11 @@ export class Actor {
     this.wallrun = null;
     this.wallrunT = 0;
     this.wallrunCooldown = 0;
+    this.grapple = null;
+    this.grappleT = 0;
+    this.grappleCooldown = 0;
+    this.zip = null;
+    this.zipCooldown = 0;
     this.spawnProtect = 1.4;
     this.nades = this.maxNades;
     this.fireTimer = 0;
@@ -234,16 +313,86 @@ export class Actor {
     this.altHeld = false;
     this.nadeCooldown = 0;
     this.slot = 0;
-    this.lastSlot = 1;
+    this.lastSlot = Math.min(1, this.slots.length - 1);
     for (const s of this.slots) {
       s.mag = s.w.mag === Infinity ? Infinity : s.w.mag;
       s.reserve = s.w.reserve;
       s.pendingSingle = 0;
     }
+    this.chargeT = 0;
+    this.spinT = 0;
+    this.burnT = 0;
+    this.burnFrom = null;
+    this.carryMult = 1;
+    this.carrying = null;
+    this.shield = 0;
+    this.shieldT = 0;
+    this.uavUntil = -1;
+    this.airstrikes = 0;
     const it = this.intent;
-    it.fire = it.reload = it.nade = it.melee = it.jumpPressed = it.dash = it.inspect = false;
+    it.fire = it.reload = it.nade = it.melee = it.jumpPressed = it.dash = it.inspect = it.airstrike = false;
+    it.grapple = it.interact = it.interactHold = false;
     it.switchTo = -1;
     if (this.model) this.model.resetDeath();
+  }
+
+  // --------------------------------------------------------
+  // Seilbahn
+  // --------------------------------------------------------
+  /** Auf eine Seilbahn aufspringen; fromA: am Ende A einsteigen (Fahrt Richtung B) */
+  attachZip(def, fromA) {
+    if (this.zip || this.zipCooldown > 0) return false;
+    this.zip = { def, t: fromA ? 0 : 1, dir: fromA ? 1 : -1 };
+    this.vel.x = this.vel.y = this.vel.z = 0;
+    this.wallrun = null;
+    this.grapple = null;
+    this.dashT = 0;
+    this.sliding = false;
+    this.grounded = false;
+    this.game.onZipStart && this.game.onZipStart(this);
+    return true;
+  }
+
+  _detachZip(jump) {
+    const z = this.zip;
+    if (!z) return;
+    this.zip = null;
+    this.zipCooldown = 0.8;
+    if (jump) { this.vel.y = PHYS.JUMP_VEL * 0.85; this.jumpBuffer = 0; this.sinceJump = 0; this.game.onJump && this.game.onJump(this); }
+    this.game.onZipEnd && this.game.onZipEnd(this);
+  }
+
+  _updateZip(dt, world) {
+    const z = this.zip, d = z.def;
+    const dx = d.b.x - d.a.x, dy = d.b.y - d.a.y, dz = d.b.z - d.a.z;
+    const len = Math.max(0.01, Math.hypot(dx, dy, dz));
+    z.t += z.dir * PHYS.ZIP_SPEED * dt / len;
+    const t = clamp(z.t, 0, 1);
+    this.pos.x = d.a.x + dx * t;
+    this.pos.y = d.a.y + dy * t - PHYS.ZIP_HANG;
+    this.pos.z = d.a.z + dz * t;
+    this.vel.x = dx / len * PHYS.ZIP_SPEED * z.dir;
+    this.vel.y = dy / len * PHYS.ZIP_SPEED * z.dir;
+    this.vel.z = dz / len * PHYS.ZIP_SPEED * z.dir;
+    this.grounded = false;
+    this.wasGrounded = false;
+    if (this.intent.jumpPressed) { this.intent.jumpPressed = false; this._detachZip(true); return; }
+    if (z.t <= 0 || z.t >= 1) {
+      // Am Ende: leicht vorwaerts abspringen
+      this._detachZip(false);
+      this.vel.x *= 0.6; this.vel.z *= 0.6; this.vel.y = Math.max(this.vel.y, 1);
+    }
+  }
+
+  // --------------------------------------------------------
+  // Enterhaken
+  // --------------------------------------------------------
+  _releaseGrapple(boost) {
+    if (!this.grapple) return;
+    this.grapple = null;
+    this.grappleCooldown = PHYS.GRAPPLE_COOLDOWN;
+    if (boost) this.vel.y = Math.max(this.vel.y, 6) + 3;
+    this.game.onGrappleEnd && this.game.onGrappleEnd(this);
   }
 
   // --------------------------------------------------------
@@ -346,6 +495,34 @@ export class Actor {
     if (this.dashCooldown > 0) this.dashCooldown -= dt;
     if (this.dashT > 0) this.dashT -= dt;
     if (this.wallrunCooldown > 0) this.wallrunCooldown -= dt;
+    if (this.grappleCooldown > 0) this.grappleCooldown -= dt;
+    if (this.zipCooldown > 0) this.zipCooldown -= dt;
+    if (this.spawnProtect > 0 && this.zip) this.spawnProtect -= dt;
+
+    // Seilbahn: eigene Bewegung, keine Physik
+    if (this.zip) { this._updateZip(dt, world); return; }
+
+    // Enterhaken: abschiessen / loslassen
+    if (it.grapple) {
+      it.grapple = false;
+      if (this.grapple) this._releaseGrapple(false);
+      else if (this.canGrapple && this.grappleCooldown <= 0) {
+        const ey = this.pos.y + this.eyeHeight();
+        const cp = Math.cos(this.pitch);
+        const dx = -Math.sin(this.yaw) * cp, dy = Math.sin(this.pitch), dz = -Math.cos(this.yaw) * cp;
+        const h = world.raycast(this.pos.x, ey, this.pos.z, dx, dy, dz, P.GRAPPLE_RANGE);
+        if (h) {
+          this.grapple = { x: h.x, y: h.y, z: h.z };
+          this.grappleT = 0;
+          this.wallrun = null;
+          this.sliding = false;
+          this.game.onGrappleStart && this.game.onGrappleStart(this);
+        } else {
+          this.grappleCooldown = 0.35;
+          this.game.onGrappleMiss && this.game.onGrappleMiss(this);
+        }
+      }
+    }
     if (it.jumpPressed) { this.jumpBuffer = P.JUMP_BUFFER; it.jumpPressed = false; }
 
     let speed2 = Math.hypot(this.vel.x, this.vel.z);
@@ -391,7 +568,8 @@ export class Actor {
     if (wl > 0.0001) { wx /= wl; wz /= wl; }
 
     // ---- Maximalgeschwindigkeit ----
-    let maxSpeed = baseSpeed * (w.moveMult || 1);
+    let maxSpeed = baseSpeed * (w.moveMult || 1) * this.carryMult;
+    if (w.spinUp && this.spinT > 0.2) maxSpeed *= 0.7;        // laufende Minigun bremst
     if (this.adsAmount > 0.05) {
       maxSpeed *= 1 - this.adsAmount * (1 - (w.adsMoveMult || 0.45));
     }
@@ -418,6 +596,38 @@ export class Actor {
       }
     }
     const dashing = this.dashT > 0;
+
+    // ---- Enterhaken: zum Anker ziehen ----
+    if (this.grapple) {
+      this.grappleT += dt;
+      const g = this.grapple;
+      const gx = g.x - this.pos.x, gy = g.y - (this.pos.y + this.eyeHeight() * 0.6), gz = g.z - this.pos.z;
+      const dist = Math.hypot(gx, gy, gz);
+      if (dist < P.GRAPPLE_MIN || this.grappleT > P.GRAPPLE_TIME) {
+        this._releaseGrapple(true);
+      } else if (this.jumpBuffer > 0) {
+        this.jumpBuffer = 0;
+        this._releaseGrapple(true);
+      } else {
+        const ux = gx / dist, uy = gy / dist, uz = gz / dist;
+        // Anfangs-Ruck, dann konstante Beschleunigung; Tempo entlang des Seils begrenzen
+        const kick = this.grappleT < 0.12 ? 2.2 : 1;
+        this.vel.x += ux * P.GRAPPLE_ACCEL * kick * dt;
+        this.vel.y += uy * P.GRAPPLE_ACCEL * kick * dt;
+        this.vel.z += uz * P.GRAPPLE_ACCEL * kick * dt;
+        const along = this.vel.x * ux + this.vel.y * uy + this.vel.z * uz;
+        if (along > P.GRAPPLE_MAX) {
+          const ex = along - P.GRAPPLE_MAX;
+          this.vel.x -= ux * ex; this.vel.y -= uy * ex; this.vel.z -= uz * ex;
+        }
+        // Querbewegung daempfen (Pendeln beruhigen)
+        const px = this.vel.x - ux * along, py = this.vel.y - uy * along, pz = this.vel.z - uz * along;
+        const damp = Math.min(1, dt * 1.8);
+        this.vel.x -= px * damp; this.vel.y -= py * damp; this.vel.z -= pz * damp;
+        if (this.grounded && uy > 0.15) { this.grounded = false; this.coyote = 0; this.vel.y = Math.max(this.vel.y, 5); }
+      }
+    }
+    const grappling = !!this.grapple;
 
     // ---- Springen (vor der Reibung, damit Bunny-Hop keine Geschwindigkeit verliert) ----
     let didJump = false;
@@ -463,6 +673,9 @@ export class Actor {
     // ---- Reibung / Beschleunigung ----
     if (dashing) {
       // Waehrend des Dashs: keine Reibung, keine Lenkung, Schwerkraft reduziert
+    } else if (grappling) {
+      // Am Seil: leichte Lenkung, keine Bodenreibung
+      this._accelerate(wx, wz, Math.min(wishSpeed, P.AIR_WISH_CAP), P.AIR_ACCEL * 0.5, dt);
     } else if (this.wallrun) {
       // Wandlauf: Tempo entlang der Wand halten, leicht an die Wand druecken
       const wr = this.wallrun;
@@ -511,7 +724,7 @@ export class Actor {
       this.vel.y -= P.GRAVITY * P.WALLRUN_GRAVITY * dt;
       if (this.vel.y < -3) this.vel.y = -3;
     } else {
-      this.vel.y -= P.GRAVITY * (dashing ? 0.3 : 1) * dt;
+      this.vel.y -= P.GRAVITY * (dashing ? 0.3 : grappling ? P.GRAPPLE_GRAVITY : 1) * dt;
     }
     if (this.vel.y < -P.MAX_FALL) this.vel.y = -P.MAX_FALL;
 
@@ -528,6 +741,12 @@ export class Actor {
     if (res.wallZ) this.vel.z = 0;
     if (res.ceiling && this.vel.y > 0) this.vel.y = 0;
     if (res.stepped > 0.02 && this.onStep) this.onStep(res.stepped);
+
+    // Am Seil gegen die Wand/Decke am Anker gestossen -> loslassen
+    if (this.grapple && (res.wallX || res.wallZ || res.ceiling)) {
+      const g = this.grapple;
+      if (Math.hypot(g.x - this.pos.x, g.y - this.pos.y - 1, g.z - this.pos.z) < 5) this._releaseGrapple(true);
+    }
 
     let grounded = res.ground;
 
@@ -661,6 +880,23 @@ export class Actor {
     if (this.fireTimer > 0) this.fireTimer -= dt;
     if (this.switchTimer > 0) this.switchTimer -= dt;
     if (this.nadeCooldown > 0) this.nadeCooldown -= dt;
+    if (this.shieldT > 0) { this.shieldT -= dt; if (this.shieldT <= 0) this.shield = 0; }
+
+    // Minigun: Laeufe laufen an, solange der Abzug gehalten wird, sonst auslaufen
+    if (w.spinUp) {
+      const canSpin = it.fire && this.reloadTimer <= 0 && this.switchTimer <= 0 && s.mag > 0;
+      const before = this.spinT;
+      this.spinT = canSpin ? Math.min(w.spinUp, this.spinT + dt) : Math.max(0, this.spinT - dt * 1.4);
+      if (this.spinT !== before && this.game.onSpin) this.game.onSpin(this, this.spinT / w.spinUp, canSpin);
+    } else if (this.spinT > 0) {
+      this.spinT = 0;
+    }
+
+    // Luftschlag anfordern (Killstreak)
+    if (it.airstrike) {
+      it.airstrike = false;
+      if (this.airstrikes > 0 && this.game.callAirstrike && this.game.callAirstrike(this)) this.airstrikes--;
+    }
 
     // ADS
     const canAds = !w.melee && !this.sliding;
@@ -677,6 +913,8 @@ export class Actor {
       this.burstLeft = 0;
       this.spread = 0;
       this.adsAmount = 0;
+      this.chargeT = 0;
+      this.spinT = 0;
       this.triggerHeld = true;      // kein Sofortschuss nach dem Wechsel
       this.game.onWeaponSwitch && this.game.onWeaponSwitch(this);
       it.switchTo = -1;
@@ -740,6 +978,28 @@ export class Actor {
     }
     it.reload = false;
 
+    // Bogen: halten spannt, loslassen schiesst (Kraft nach Spanndauer)
+    if (w.charge) {
+      const canDraw = s.mag > 0 && this.fireTimer <= 0;
+      if (it.fire && canDraw) {
+        if (this.chargeT === 0 && this.game.onChargeStart) this.game.onChargeStart(this);
+        this.chargeT = Math.min(w.charge.time, this.chargeT + dt);
+      } else if (this.chargeT > 0) {
+        if (this.chargeT > 0.1 && s.mag > 0) {
+          const power = clamp(this.chargeT / w.charge.time, w.charge.minPower, 1);
+          this.chargeT = 0;
+          this._doFire(power);
+        } else {
+          this.chargeT = 0;
+        }
+      } else if (it.fire && !this.triggerHeld && s.mag <= 0) {
+        this.game.onDryFire && this.game.onDryFire(this);
+      }
+      this.triggerHeld = it.fire;
+      this.spread = Math.max(0, this.spread - w.spreadRecover * dt * 5);
+      return;
+    }
+
     // Feuern
     const auto = w.auto;
     let triggered = false;
@@ -750,13 +1010,15 @@ export class Actor {
       if (auto) triggered = this.fireTimer <= 0;
       else if (!this.triggerHeld) triggered = this.fireTimer <= 0;
     }
+    // Minigun schiesst erst, wenn die Laeufe auf Touren sind
+    if (triggered && w.spinUp && this.spinT < w.spinUp - 1e-4) triggered = false;
 
     if (triggered) {
       if (s.mag !== Infinity && s.mag <= 0) {
         if (!this.triggerHeld) this.game.onDryFire && this.game.onDryFire(this);
         this.burstLeft = 0;
       } else {
-        this._doFire();
+        this._doFire(1);
       }
     }
 
@@ -767,7 +1029,7 @@ export class Actor {
     this.spread = Math.max(0, this.spread - rec * dt * 5);
   }
 
-  _doFire() {
+  _doFire(power) {
     const w = this.weapon;
     const s = this.ammo;
 
@@ -786,7 +1048,7 @@ export class Actor {
     }
 
     this.spread = Math.min(w.spreadMax, this.spread + w.spreadPerShot);
-    this.game.fireWeapon(this);
+    this.game.fireWeapon(this, false, power === undefined ? 1 : power);
   }
 
   _startReload() {
@@ -836,6 +1098,12 @@ export class Actor {
   // Schaden
   // --------------------------------------------------------
   applyDamage(amount) {
+    if (this.shield > 0) {
+      const toShield = Math.min(this.shield, amount);
+      this.shield -= toShield;
+      amount -= toShield;
+      if (amount <= 0) return false;
+    }
     if (this.armor > 0) {
       const toArmor = Math.min(this.armor, amount * 0.6);
       this.armor -= toArmor;

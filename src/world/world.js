@@ -104,7 +104,8 @@ export class World {
     this.group = new THREE.Group();
     scene.add(this.group);
 
-    this.colliders = [];   // {minx,miny,minz,maxx,maxy,maxz, cx,cy,cz, rad}
+    this.colliders = [];   // {minx,miny,minz,maxx,maxy,maxz, cx,cy,cz, rad, dead, destr}
+    this.destructibles = [];   // Collider mit destr-Daten (Kisten, Faesser, Glas)
     this.cell = 8;         // Broadphase-Zellgroesse
     this.grid = new Map();
 
@@ -115,6 +116,98 @@ export class World {
     this._buildMeshes();
     this._buildBroadphase();
     this._buildNav();
+  }
+
+  // --------------------------------------------------------
+  // Zerstoerbare Objekte: eigene Meshes, Collider werden per `dead` abgeschaltet
+  // --------------------------------------------------------
+  _buildDestructible(box, min, max, material) {
+    const A = { pos: [], nor: [], col: [], uv: [], idx: [] };
+    const glass = box.destr.type === 'glass';
+    const minDim = Math.min(box.w, box.h, box.d);
+    pushBox(A, min, max, box.color, 0.25, !glass, false, clamp(minDim * 0.08, 0.01, 0.06), 1);
+    let mat = material;
+    if (glass) {
+      if (!this._glassMat) {
+        this._glassMat = new THREE.MeshStandardMaterial({
+          vertexColors: true, transparent: true, opacity: 0.32, roughness: 0.08, metalness: 0.15,
+          envMapIntensity: 0.9, depthWrite: false, side: THREE.DoubleSide,
+        });
+      }
+      mat = this._glassMat;
+    }
+    const mesh = new THREE.Mesh(buildGeometry(A), mat);
+    mesh.castShadow = !glass;
+    mesh.receiveShadow = true;
+    if (glass) mesh.renderOrder = 4;
+    this.group.add(mesh);
+    return mesh;
+  }
+
+  /** Durchscheinende Box (Wasser, Wasserfall): eigenes Mesh mit Transparenz */
+  _buildTranslucent(box, min, max) {
+    const A = { pos: [], nor: [], col: [], uv: [], idx: [] };
+    pushBox(A, min, max, box.color, 0.25, false, false, 0.01, 1 + (box.emissive || 0) * 1.2);
+    const key = box.alpha + '|' + (box.emissive || 0);
+    if (!this._transMats) this._transMats = new Map();
+    let mat = this._transMats.get(key);
+    if (!mat) {
+      mat = new THREE.MeshStandardMaterial({
+        vertexColors: true, transparent: true, opacity: box.alpha, roughness: 0.15, metalness: 0.05,
+        envMapIntensity: 0.8, depthWrite: false, side: THREE.DoubleSide,
+        emissive: new THREE.Color(0xffffff), emissiveIntensity: (box.emissive || 0) * 0.4,
+      });
+      this._transMats.set(key, mat);
+    }
+    const mesh = new THREE.Mesh(buildGeometry(A), mat);
+    mesh.renderOrder = 3;
+    mesh.receiveShadow = true;
+    this.group.add(mesh);
+    return mesh;
+  }
+
+  /** Schaden an einem zerstoerbaren Collider; true, wenn er dabei zerstoert wurde */
+  damageDestructible(c, dmg) {
+    if (!c || !c.destr || c.dead) return false;
+    c.destr.hp -= dmg;
+    if (c.destr.hp > 0) return false;
+    c.dead = true;
+    c.destr.mesh.visible = false;
+    c.destr.respawnT = c.destr.respawn;
+    return true;
+  }
+
+  /** Zerstoerte Objekte nach einer Weile wieder aufbauen (wenn niemand drinsteht) */
+  updateDestructibles(dt, actors) {
+    for (let i = 0; i < this.destructibles.length; i++) {
+      const c = this.destructibles[i];
+      if (!c.dead) continue;
+      c.destr.respawnT -= dt;
+      if (c.destr.respawnT > 0) continue;
+      let blocked = false;
+      for (const a of actors) {
+        if (!a.alive) continue;
+        if (a.pos.x + a.radius > c.minx && a.pos.x - a.radius < c.maxx &&
+            a.pos.z + a.radius > c.minz && a.pos.z - a.radius < c.maxz &&
+            a.pos.y + a.height > c.miny && a.pos.y < c.maxy) { blocked = true; break; }
+      }
+      if (blocked) { c.destr.respawnT = 2; continue; }
+      c.dead = false;
+      c.destr.hp = c.destr.maxHp;
+      c.destr.mesh.visible = true;
+    }
+  }
+
+  /** Zerstoerbare Objekte im Umkreis (fuer Explosionen) */
+  destructiblesNear(x, y, z, r, out) {
+    out.length = 0;
+    for (let i = 0; i < this.destructibles.length; i++) {
+      const c = this.destructibles[i];
+      if (c.dead) continue;
+      const dx = Math.max(c.minx - x, 0, x - c.maxx), dy = Math.max(c.miny - y, 0, y - c.maxy), dz = Math.max(c.minz - z, 0, z - c.maxz);
+      if (dx * dx + dy * dy + dz * dz <= r * r) out.push(c);
+    }
+    return out;
   }
 
   dispose() {
@@ -131,6 +224,8 @@ export class World {
       }
     });
     this.scene.remove(this.group);
+    if (this._glassMat) { this._glassMat.dispose(); this._glassMat = null; }
+    if (this._transMats) { for (const m of this._transMats.values()) m.dispose(); this._transMats = null; }
     if (this.envRT) { this.envRT.dispose(); this.envRT = null; }
     this.scene.environment = null;
   }
@@ -141,6 +236,9 @@ export class World {
     const solid = { pos: [], nor: [], col: [], uv: [], idx: [] };
     const glow = { pos: [], nor: [], col: [], uv: [], idx: [] };
     const rng = makeRng(1337);
+
+    const matSolid = makeWorldMaterial();
+    const pendingDestr = [];
 
     for (const box of map.boxes) {
       const min = { x: box.cx - box.w / 2, y: box.by, z: box.cz - box.d / 2 };
@@ -158,22 +256,33 @@ export class World {
 
       const minDim = Math.min(box.w, box.h, box.d);
       const chamfer = clamp(minDim * 0.08, 0.02, 0.09);
-      if (box.emissive) pushBox(glow, min, max, box.color, 0.25, false, box.by <= 0.001, chamfer * 0.5, 1.4 + box.emissive * 1.6);
+      if (box.destr) { /* eigenes Mesh, siehe unten */ }
+      else if (box.alpha) this._buildTranslucent(box, min, max);
+      else if (box.emissive) pushBox(glow, min, max, box.color, 0.25, false, box.by <= 0.001, chamfer * 0.5, 1.4 + box.emissive * 1.6);
       else pushBox(solid, min, max, color, 0.25, true, box.by <= 0.001, chamfer, 1);
 
       if (!box.noCollide) {
-        this.colliders.push({
+        const c = {
           minx: min.x, miny: min.y, minz: min.z,
           maxx: max.x, maxy: max.y, maxz: max.z,
           cx: box.cx, cy: box.by + box.h / 2, cz: box.cz,
           rad: Math.sqrt(box.w * box.w + box.h * box.h + box.d * box.d) * 0.5,
           surface: box.surface || 'stone',
+          dead: false, destr: null,
           _i: 0,
-        });
+        };
+        if (box.destr) {
+          c.destr = {
+            type: box.destr.type, hp: box.destr.hp, maxHp: box.destr.hp, explode: !!box.destr.explode,
+            respawn: box.destr.respawn || 40, respawnT: 0, color: box.color,
+            w: box.w, h: box.h, d: box.d, mesh: this._buildDestructible(box, min, max, matSolid),
+          };
+          this.destructibles.push(c);
+        }
+        this.colliders.push(c);
       }
     }
 
-    const matSolid = makeWorldMaterial();
     this.meshSolid = new THREE.Mesh(buildGeometry(solid), matSolid);
     this.meshSolid.castShadow = true;
     this.meshSolid.receiveShadow = true;
@@ -280,6 +389,7 @@ export class World {
           const c = arr[i];
           if (mark[c._i] === stamp) continue;
           mark[c._i] = stamp;
+          if (c.dead) continue;
           out.push(c);
         }
       }
@@ -294,6 +404,7 @@ export class World {
     let bestT = maxDist;
     let bnx = 0, bny = 0, bnz = 0;
     let hit = false;
+    let bestC = null;
 
     const invx = dx !== 0 ? 1 / dx : 1e30;
     const invy = dy !== 0 ? 1 / dy : 1e30;
@@ -321,6 +432,7 @@ export class World {
             const c = arr[i];
             if (mark[c._i] === stamp) continue;
             mark[c._i] = stamp;
+            if (c.dead) continue;
 
             const mx = c.cx - ox, my = c.cy - oy, mz = c.cz - oz;
             const proj = mx * dx + my * dy + mz * dz;
@@ -355,6 +467,7 @@ export class World {
               bny = ax === 1 ? sgn : 0;
               bnz = ax === 2 ? sgn : 0;
               hit = true;
+              bestC = c;
             }
           }
         }
@@ -374,6 +487,7 @@ export class World {
       t: bestT,
       x: ox + dx * bestT, y: oy + dy * bestT, z: oz + dz * bestT,
       nx: bnx, ny: bny, nz: bnz,
+      col: bestC,
     };
   }
 

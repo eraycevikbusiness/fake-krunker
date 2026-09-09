@@ -1,5 +1,8 @@
 // ============================================================
-// Minimap: statischer Karten-Hintergrund + dynamische Spieler
+// Minimap: statischer Karten-Hintergrund + dynamische Spieler.
+// Gegner erscheinen nur, wenn sie gerade geschossen haben (laut)
+// oder das UAV (Killstreak) aktiv ist. Mitspieler immer.
+// Modi-Objekte (Flaggen, Hardpoint) kommen ueber player.items.
 // ============================================================
 
 import { clamp } from '../core/utils.js';
@@ -55,7 +58,7 @@ export class Minimap {
   }
 
   /**
-   * @param player lokaler Spieler
+   * @param player {x,y,z,yaw,actor,pickups,uav,items,teamMode}
    * @param actors alle Akteure
    * @param sameTeam Funktion (a,b) -> bool
    */
@@ -86,25 +89,66 @@ export class Minimap {
       this.bg.width * bgScale, this.bg.height * bgScale
     );
 
+    // Modi-Objekte (Flaggen, Zone)
+    if (player.items) {
+      for (const it of player.items) {
+        const dx = (it.x - player.x) * worldToPx;
+        const dz = (it.z - player.z) * worldToPx;
+        if (it.zone) {
+          g.fillStyle = it.color.replace(')', ',0.25)').replace('rgb(', 'rgba(').replace('#', '#');
+          g.strokeStyle = it.color;
+          g.lineWidth = 2;
+          g.beginPath(); g.arc(dx, dz, it.zone * worldToPx, 0, Math.PI * 2);
+          g.globalAlpha = 0.25; g.fill(); g.globalAlpha = 1; g.stroke();
+        } else if (it.ring) {
+          g.strokeStyle = it.color;
+          g.lineWidth = 2;
+          g.beginPath(); g.arc(dx, dz, 6, 0, Math.PI * 2); g.stroke();
+        }
+        if (it.label) {
+          g.save();
+          g.translate(dx, dz);
+          g.rotate(-player.yaw);
+          g.fillStyle = it.color;
+          g.strokeStyle = 'rgba(0,0,0,0.8)';
+          g.lineWidth = 3;
+          g.font = (it.big ? 'bold 13px ' : 'bold 11px ') + 'Rajdhani, sans-serif';
+          g.textAlign = 'center'; g.textBaseline = 'middle';
+          g.strokeText(it.label, 0, 0);
+          g.fillText(it.label, 0, 0);
+          g.restore();
+        }
+      }
+    }
+
     // Akteure
     for (const a of actors) {
       if (!a.alive) continue;
       if (a === player.actor) continue;
+      const friend = sameTeam(a, player.actor);
+      // Gegner nur bei UAV oder wenn sie gerade laut waren
+      const loud = (time - (a.lastLoudTime || -99)) < 1.6;
+      if (!friend && !player.uav && !loud) continue;
       const dx = (a.pos.x - player.x) * worldToPx;
       const dz = (a.pos.z - player.z) * worldToPx;
       if (Math.hypot(dx, dz) > R - 6) continue;
 
-      const friend = sameTeam(a, player.actor);
       g.save();
       g.translate(dx, dz);
       g.rotate(-a.yaw + Math.PI);
-      g.fillStyle = friend ? '#4499ff' : '#ff4444';
+      const tc = player.teamCss || { red: '#ff6b6b', blue: '#7ab4ff' };
+      g.fillStyle = friend ? (player.teamMode ? (tc[a.team] || '#7ab4ff') : '#4499ff') : '#ff4444';
+      if (!friend && !player.uav) g.globalAlpha = 0.75;
       g.strokeStyle = 'rgba(0,0,0,0.7)';
       g.lineWidth = 1.5;
       g.beginPath();
       g.moveTo(0, -5.5); g.lineTo(4, 4); g.lineTo(0, 1.5); g.lineTo(-4, 4);
       g.closePath();
       g.fill(); g.stroke();
+      if (a.carrying) {
+        g.fillStyle = '#ffcc00';
+        g.beginPath(); g.arc(0, 0, 7, 0, Math.PI * 2); g.lineWidth = 2; g.strokeStyle = '#ffcc00'; g.stroke();
+      }
       // Hoehenunterschied andeuten
       const dy = a.pos.y - player.y;
       if (Math.abs(dy) > 2.5) {
@@ -142,6 +186,17 @@ export class Minimap {
     g.fill(); g.stroke();
     g.restore();
 
+    // UAV-Hinweis
+    if (player.uav) {
+      g.save();
+      g.strokeStyle = 'rgba(255,204,0,0.8)';
+      g.lineWidth = 2;
+      g.beginPath();
+      g.arc(R, R, (R - 8) * ((time * 0.5) % 1), 0, Math.PI * 2);
+      g.stroke();
+      g.restore();
+    }
+
     // Nordanzeige
     g.save();
     g.translate(R, R);
@@ -153,7 +208,7 @@ export class Minimap {
     g.restore();
 
     // Rand
-    g.strokeStyle = 'rgba(255,255,255,0.22)';
+    g.strokeStyle = player.uav ? 'rgba(255,204,0,0.5)' : 'rgba(255,255,255,0.22)';
     g.lineWidth = 2;
     g.beginPath();
     g.arc(R, R, R - 1, 0, Math.PI * 2);

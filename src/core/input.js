@@ -14,7 +14,7 @@ const BLOCK_IN_GAME = new Set([
 // Damit schliesst z.B. Strg+W (Ducken + Vorwaerts) nicht mehr den Tab.
 const LOCK_KEYS = [
   'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyC', 'KeyR', 'KeyQ', 'KeyF', 'KeyG', 'KeyV', 'KeyP',
-  'KeyT', 'KeyN', 'Tab', 'Space', 'ControlLeft', 'ControlRight', 'ShiftLeft', 'ShiftRight',
+  'KeyT', 'KeyN', 'KeyE', 'KeyX', 'Tab', 'Space', 'ControlLeft', 'ControlRight', 'ShiftLeft', 'ShiftRight',
   'AltLeft', 'AltRight', 'Digit1', 'Digit2', 'Digit3', 'Digit4',
 ];
 
@@ -29,6 +29,8 @@ export class Input {
     this.dx = 0; this.dy = 0;
     this.wheel = 0;
     this.locked = false;
+    this.virtualLock = false;              // Touch-Steuerung: kein Pointer-Lock noetig
+    this.touchMove = null;                 // {x,y} vom Touch-Joystick
     this.enabled = true;
     this.gameActive = false;               // wird von main.js gesetzt: Spiel laeuft
     this._onLockChange = null;
@@ -40,6 +42,7 @@ export class Input {
 
     canvas.addEventListener('mousedown', (e) => {
       if (!this.locked) return;
+      if (e.button === 1) e.preventDefault();      // mittlere Maustaste: Enterhaken, kein Autoscroll
       if (e.button < 3) { this.mouse[e.button] = true; this.mousePressed[e.button] = true; }
     });
     addEventListener('mouseup', (e) => {

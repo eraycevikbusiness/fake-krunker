@@ -36,8 +36,20 @@ void main() {
 }
 `;
 
+// Eckige Partikel (Konfetti, Wuerfel): leichte Schattierung nach Position
+const SQUARE_FS = `
+varying vec3 vColor;
+varying float vAlpha;
+void main() {
+  vec2 d = gl_PointCoord - vec2(0.5);
+  if (abs(d.x) > 0.42 || abs(d.y) > 0.42) discard;
+  float shade = 0.82 + 0.36 * smoothstep(-0.4, 0.4, -d.y - d.x * 0.5);
+  gl_FragColor = vec4(vColor * shade, vAlpha);
+}
+`;
+
 class ParticleSystem {
-  constructor(scene, capacity, additive) {
+  constructor(scene, capacity, additive, square) {
     this.cap = capacity;
     this.count = 0;
     this.pos = new Float32Array(capacity * 3);
@@ -68,7 +80,7 @@ class ParticleSystem {
 
     const m = new THREE.ShaderMaterial({
       vertexShader: PARTICLE_VS,
-      fragmentShader: PARTICLE_FS,
+      fragmentShader: square ? SQUARE_FS : PARTICLE_FS,
       transparent: true,
       depthWrite: false,
       blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending,
@@ -283,6 +295,7 @@ export class Effects {
     this.scene = scene;
     this.sparks = new ParticleSystem(scene, 1400, true);
     this.smoke = new ParticleSystem(scene, 900, false);
+    this.bits = new ParticleSystem(scene, 900, false, true);     // eckige Teilchen (Konfetti, Wuerfel, Muenzen)
 
     this.holeTex = makeHoleTexture();
     this.flashTex = makeFlashTexture();
@@ -549,6 +562,264 @@ export class Effects {
     }
   }
 
+  // --------------------------------------------------------
+  // Kill-Effekte (am Opfer; x,y,z = Fusspunkt)
+  // --------------------------------------------------------
+  killEffect(kind, x, y, z, bodyColor) {
+    const amt = this.amount;
+    if (amt <= 0) return;
+    const cy = y + 1.3;
+    switch (kind) {
+      case 'confetti': {
+        const cols = [[1, 0.2, 0.3], [1, 0.85, 0.1], [0.2, 0.9, 0.4], [0.2, 0.6, 1], [0.9, 0.3, 1], [1, 1, 1], [1, 0.55, 0.1]];
+        const n = Math.round(150 * amt);
+        for (let i = 0; i < n; i++) {
+          const c = cols[(Math.random() * cols.length) | 0];
+          const a = Math.random() * Math.PI * 2, e = Math.acos(rand(-0.3, 1));
+          const sp = rand(4, 13);
+          this.bits.spawn(x + rand(-0.3, 0.3), y + rand(0.3, 2.2), z + rand(-0.3, 0.3),
+            Math.sin(e) * Math.cos(a) * sp, Math.cos(e) * sp + 3, Math.sin(e) * Math.sin(a) * sp,
+            { r: c[0], g: c[1], b: c[2], life: rand(1.4, 2.6), size0: rand(0.09, 0.16), size1: rand(0.06, 0.12), gravity: 5.5, drag: 2.2, alpha: 1 });
+        }
+        // Knall-Wolke
+        for (let i = 0; i < 8 * amt; i++) {
+          this.smoke.spawn(x, cy, z, rand(-2, 2), rand(0, 2), rand(-2, 2),
+            { r: 1, g: 0.95, b: 0.9, life: 0.5, size0: 0.4, size1: 1.4, gravity: -0.5, drag: 3, alpha: 0.35 });
+        }
+        break;
+      }
+      case 'fireworks': {
+        const hue = Math.random();
+        const c1 = this._col.setHSL(hue, 1, 0.6), c2 = new THREE.Color().setHSL((hue + 0.33) % 1, 1, 0.65);
+        const n = Math.round(160 * amt);
+        for (let i = 0; i < n; i++) {
+          const a = Math.random() * Math.PI * 2, e = Math.acos(rand(-1, 1));
+          const sp = rand(9, 18);
+          const c = i % 3 === 0 ? c2 : c1;
+          this.sparks.spawn(x, cy, z,
+            Math.sin(e) * Math.cos(a) * sp, Math.cos(e) * sp + 2, Math.sin(e) * Math.sin(a) * sp,
+            { r: c.r * 1.6, g: c.g * 1.6, b: c.b * 1.6, life: rand(0.7, 1.5), size0: rand(0.1, 0.18), size1: 0.02, gravity: 9, drag: 1.8, alpha: 1 });
+        }
+        // Zweite Stufe: Glitzer
+        for (let i = 0; i < 60 * amt; i++) {
+          const a = Math.random() * Math.PI * 2, e = Math.acos(rand(-1, 1));
+          const sp = rand(2, 6);
+          this.sparks.spawn(x, cy + 0.4, z, Math.sin(e) * Math.cos(a) * sp, Math.cos(e) * sp, Math.sin(e) * Math.sin(a) * sp,
+            { r: 2, g: 1.9, b: 1.5, life: rand(1.2, 2.2), size0: 0.06, size1: 0.0, gravity: 3, drag: 1.2, alpha: 1 });
+        }
+        const b = this.blasts[this.blastIdx];
+        this.blastIdx = (this.blastIdx + 1) % this.blasts.length;
+        b.mesh.visible = true; b.mesh.position.set(x, cy, z); b.mesh.scale.setScalar(0.3);
+        b.mesh.material.opacity = 0.9; b.radius = 2.4; b.life = b.maxLife = 0.28;
+        break;
+      }
+      case 'voxel': {
+        const c = this._col.setHex(bodyColor === undefined ? 0x4a86d9 : bodyColor);
+        const n = Math.round(120 * amt);
+        for (let i = 0; i < n; i++) {
+          const px = x + rand(-0.45, 0.45), py = y + rand(0.05, 2.35), pz = z + rand(-0.25, 0.25);
+          const shade = rand(0.6, 1.25);
+          const skin = py > y + 1.8 && Math.random() < 0.6;
+          this.bits.spawn(px, py, pz, (px - x) * rand(3, 9) + rand(-1.5, 1.5), rand(1, 6), (pz - z) * rand(3, 9) + rand(-1.5, 1.5),
+            { r: (skin ? 0.85 : c.r) * shade, g: (skin ? 0.65 : c.g) * shade, b: (skin ? 0.5 : c.b) * shade,
+              life: rand(0.9, 1.8), size0: rand(0.16, 0.26), size1: 0.02, gravity: 14, drag: 0.6, alpha: 1 });
+        }
+        for (let i = 0; i < 30 * amt; i++) {
+          this.sparks.spawn(x, y + rand(0.2, 2.2), z, rand(-3, 3), rand(0, 4), rand(-3, 3),
+            { r: 0.4, g: 1.8, b: 2.4, life: rand(0.3, 0.7), size0: 0.08, size1: 0, gravity: 0, drag: 2, alpha: 1 });
+        }
+        break;
+      }
+      case 'soul': {
+        const n = Math.round(70 * amt);
+        for (let i = 0; i < n; i++) {
+          const a = Math.random() * Math.PI * 2, r = rand(0, 0.35);
+          this.sparks.spawn(x + Math.cos(a) * r, y + rand(0.3, 1.9), z + Math.sin(a) * r,
+            Math.cos(a) * 0.3, rand(1.2, 2.8), Math.sin(a) * 0.3,
+            { r: 0.7, g: 1.3, b: 1.8, life: rand(1.6, 2.8), size0: rand(0.12, 0.3), size1: 0.04, gravity: -0.6, drag: 0.4, alpha: 0.7 });
+        }
+        for (let i = 0; i < 14 * amt; i++) {
+          this.smoke.spawn(x + rand(-0.3, 0.3), y + rand(0.5, 2), z + rand(-0.3, 0.3), rand(-0.3, 0.3), rand(0.8, 1.6), rand(-0.3, 0.3),
+            { r: 0.75, g: 0.9, b: 1, life: rand(1.5, 2.5), size0: 0.3, size1: 1.0, gravity: -0.8, drag: 0.8, alpha: 0.28 });
+        }
+        break;
+      }
+      case 'coins': {
+        const n = Math.round(90 * amt);
+        for (let i = 0; i < n; i++) {
+          const a = Math.random() * Math.PI * 2;
+          const sp = rand(1.5, 5);
+          const sh = rand(0.75, 1.15);
+          this.bits.spawn(x + rand(-0.2, 0.2), y + rand(0.8, 2.2), z + rand(-0.2, 0.2), Math.cos(a) * sp, rand(4, 10), Math.sin(a) * sp,
+            { r: 1.0 * sh, g: 0.8 * sh, b: 0.2 * sh, life: rand(1.2, 2.2), size0: rand(0.1, 0.15), size1: rand(0.08, 0.12), gravity: 16, drag: 0.4, alpha: 1 });
+        }
+        for (let i = 0; i < 24 * amt; i++) {
+          this.sparks.spawn(x, y + rand(0.5, 2.2), z, rand(-2, 2), rand(1, 4), rand(-2, 2),
+            { r: 2.2, g: 1.8, b: 0.6, life: rand(0.3, 0.8), size0: 0.08, size1: 0, gravity: 2, drag: 1, alpha: 1 });
+        }
+        break;
+      }
+      case 'gore': {
+        const n = Math.round(110 * amt);
+        for (let i = 0; i < n; i++) {
+          const a = Math.random() * Math.PI * 2, e = Math.acos(rand(-0.2, 1));
+          const sp = rand(3, 12);
+          this.sparks.spawn(x, y + rand(0.8, 2.0), z, Math.sin(e) * Math.cos(a) * sp, Math.cos(e) * sp + 2, Math.sin(e) * Math.sin(a) * sp,
+            { r: 0.8, g: 0.06, b: 0.08, life: rand(0.4, 1.1), size0: rand(0.08, 0.2), size1: 0.02, gravity: 15, drag: 1.2, alpha: 0.95 });
+        }
+        break;
+      }
+      default: break;
+    }
+  }
+
+  /** Flammenwerfer-Strahl (pro Tick) */
+  flame(x, y, z, dx, dy, dz) {
+    const amt = this.amount;
+    if (amt <= 0) return;
+    const n = Math.max(1, Math.round(4 * amt));
+    for (let i = 0; i < n; i++) {
+      const sp = rand(10, 16);
+      const hot = Math.random() < 0.5;
+      this.sparks.spawn(x + dx * 0.3, y + dy * 0.3, z + dz * 0.3,
+        dx * sp + rand(-1.6, 1.6), dy * sp + rand(-0.8, 2.0), dz * sp + rand(-1.6, 1.6),
+        { r: hot ? 2.2 : 1.6, g: hot ? 1.3 : 0.5, b: hot ? 0.3 : 0.08, life: rand(0.28, 0.5), size0: rand(0.16, 0.26), size1: rand(0.5, 0.9), gravity: -4, drag: 3.2, alpha: 0.85 });
+    }
+    if (Math.random() < 0.5 * amt) {
+      this.smoke.spawn(x + dx * 1.5, y + dy * 1.5, z + dz * 1.5, dx * 4 + rand(-0.5, 0.5), 1.5, dz * 4 + rand(-0.5, 0.5),
+        { r: 0.15, g: 0.13, b: 0.12, life: rand(0.6, 1.1), size0: 0.3, size1: 1.2, gravity: -1.8, drag: 2.2, alpha: 0.28 });
+    }
+  }
+
+  /** Brennender Akteur: kleine Flammen am Koerper */
+  burn(x, y, z) {
+    const amt = this.amount;
+    if (amt <= 0) return;
+    const n = Math.max(1, Math.round(3 * amt));
+    for (let i = 0; i < n; i++) {
+      this.sparks.spawn(x + rand(-0.35, 0.35), y + rand(0.2, 2.2), z + rand(-0.35, 0.35), rand(-0.4, 0.4), rand(1.5, 3.5), rand(-0.4, 0.4),
+        { r: 2.0, g: 0.9, b: 0.2, life: rand(0.25, 0.5), size0: rand(0.12, 0.22), size1: 0.02, gravity: -3, drag: 1.5, alpha: 0.9 });
+    }
+    if (Math.random() < 0.4) {
+      this.smoke.spawn(x, y + 2.2, z, rand(-0.3, 0.3), 1.6, rand(-0.3, 0.3),
+        { r: 0.12, g: 0.11, b: 0.1, life: 0.9, size0: 0.25, size1: 0.9, gravity: -1.5, drag: 2, alpha: 0.3 });
+    }
+  }
+
+  /** Holzsplitter (Kiste zerstoert) */
+  splinters(x, y, z, colorHex, size) {
+    const amt = this.amount;
+    if (amt <= 0) return;
+    const c = this._col.setHex(colorHex === undefined ? 0xa8703a : colorHex);
+    const n = Math.round(40 * amt);
+    const s = size || 1;
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2, e = Math.acos(rand(-0.3, 1));
+      const sp = rand(3, 9);
+      const sh = rand(0.6, 1.2);
+      this.bits.spawn(x + rand(-0.5, 0.5) * s, y + rand(-0.4, 0.6) * s, z + rand(-0.5, 0.5) * s,
+        Math.sin(e) * Math.cos(a) * sp, Math.cos(e) * sp + 2, Math.sin(e) * Math.sin(a) * sp,
+        { r: c.r * sh, g: c.g * sh, b: c.b * sh, life: rand(0.8, 1.6), size0: rand(0.08, 0.2), size1: 0.04, gravity: 15, drag: 0.8, alpha: 1 });
+    }
+    for (let i = 0; i < 10 * amt; i++) {
+      this.smoke.spawn(x, y, z, rand(-2, 2), rand(0.5, 2), rand(-2, 2),
+        { r: 0.6, g: 0.5, b: 0.4, life: rand(0.5, 1.0), size0: 0.3, size1: 1.2, gravity: -0.8, drag: 2.5, alpha: 0.3 });
+    }
+  }
+
+  /** Glasscherben */
+  glass(x, y, z, nx, ny, nz, w, h) {
+    const amt = this.amount;
+    if (amt <= 0) return;
+    const n = Math.round(50 * amt);
+    for (let i = 0; i < n; i++) {
+      const px = x + (nx === 0 ? rand(-w / 2, w / 2) : 0), py = y + rand(-h / 2, h / 2), pz = z + (nz === 0 ? rand(-w / 2, w / 2) : 0);
+      const sh = rand(0.8, 1.6);
+      this.bits.spawn(px, py, pz, nx * rand(1, 5) + rand(-1.5, 1.5), rand(-1, 2), nz * rand(1, 5) + rand(-1.5, 1.5),
+        { r: 0.75 * sh, g: 0.9 * sh, b: 1.0 * sh, life: rand(0.7, 1.4), size0: rand(0.06, 0.16), size1: 0.03, gravity: 16, drag: 0.5, alpha: 0.85 });
+    }
+    for (let i = 0; i < 14 * amt; i++) {
+      this.sparks.spawn(x, y + rand(-h / 2, h / 2), z, rand(-2, 2), rand(0, 2), rand(-2, 2),
+        { r: 1.6, g: 1.9, b: 2.2, life: rand(0.2, 0.5), size0: 0.08, size1: 0, gravity: 4, drag: 2, alpha: 1 });
+    }
+  }
+
+  /** Luftschlag-Markierung: rote Rauchsaeule */
+  markSmoke(x, y, z) {
+    const amt = this.amount;
+    if (amt <= 0) return;
+    for (let i = 0; i < 3; i++) {
+      this.smoke.spawn(x + rand(-0.3, 0.3), y + 0.2, z + rand(-0.3, 0.3), rand(-0.3, 0.3), rand(2.5, 4.5), rand(-0.3, 0.3),
+        { r: 1.0, g: 0.15, b: 0.1, life: rand(1.2, 2.0), size0: 0.4, size1: 1.6, gravity: -2.5, drag: 1.2, alpha: 0.5 });
+    }
+  }
+
+  // --------------------------------------------------------
+  // Regen: Linien-Segmente um die Kamera, werden jeden Frame verschoben
+  // --------------------------------------------------------
+  setRain(on) {
+    if (on && !this.rain) {
+      const N = 700;
+      const pos = new Float32Array(N * 6);
+      const geo = new THREE.BufferGeometry();
+      this.rainAttr = new THREE.BufferAttribute(pos, 3);
+      this.rainAttr.setUsage(THREE.DynamicDrawUsage);
+      geo.setAttribute('position', this.rainAttr);
+      geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e6);
+      const mat = new THREE.LineBasicMaterial({ color: 0xbcd0e6, transparent: true, opacity: 0.38, fog: true, toneMapped: false });
+      this.rain = new THREE.LineSegments(geo, mat);
+      this.rain.frustumCulled = false;
+      this.rain.renderOrder = 7;
+      this.rainDrops = new Float32Array(N * 4);   // x,y,z,speed
+      for (let i = 0; i < N; i++) this._rainReset(i, null, true);
+      this.scene.add(this.rain);
+    } else if (!on && this.rain) {
+      this.scene.remove(this.rain);
+      this.rain.geometry.dispose(); this.rain.material.dispose();
+      this.rain = null;
+    }
+  }
+
+  _rainReset(i, cam, initial) {
+    const d = this.rainDrops;
+    const cx = cam ? cam.x : 0, cy = cam ? cam.y : 10, cz = cam ? cam.z : 0;
+    d[i * 4] = cx + rand(-18, 18);
+    d[i * 4 + 1] = initial ? cy + rand(-8, 14) : cy + rand(9, 15);
+    d[i * 4 + 2] = cz + rand(-18, 18);
+    d[i * 4 + 3] = rand(19, 26);
+  }
+
+  _rainUpdate(dt, cam) {
+    const d = this.rainDrops, p = this.rainAttr.array;
+    const N = d.length / 4;
+    for (let i = 0; i < N; i++) {
+      d[i * 4 + 1] -= d[i * 4 + 3] * dt;
+      if (d[i * 4 + 1] < cam.y - 9 || Math.abs(d[i * 4] - cam.x) > 20 || Math.abs(d[i * 4 + 2] - cam.z) > 20) this._rainReset(i, cam, false);
+      const x = d[i * 4], y = d[i * 4 + 1], z = d[i * 4 + 2];
+      p[i * 6] = x; p[i * 6 + 1] = y; p[i * 6 + 2] = z;
+      p[i * 6 + 3] = x + 0.15; p[i * 6 + 4] = y + 0.55; p[i * 6 + 5] = z;
+    }
+    this.rainAttr.needsUpdate = true;
+  }
+
+  /** Trainings-Zielscheibe zerplatzt */
+  targetPop(x, y, z, colorHex, radius) {
+    const amt = this.amount;
+    if (amt <= 0) return;
+    const c = this._col.setHex(colorHex === undefined ? 0xff8a1f : colorHex);
+    const n = Math.round(26 * amt);
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2, e = Math.acos(rand(-1, 1));
+      const sp = rand(3, 9) * (radius || 0.6) / 0.6;
+      this.sparks.spawn(x, y, z, Math.sin(e) * Math.cos(a) * sp, Math.cos(e) * sp, Math.sin(e) * Math.sin(a) * sp,
+        { r: c.r * 1.8, g: c.g * 1.8, b: c.b * 1.8, life: rand(0.25, 0.55), size0: rand(0.07, 0.14), size1: 0.01, gravity: 8, drag: 2, alpha: 1 });
+    }
+    for (let i = 0; i < 8 * amt; i++) {
+      this.bits.spawn(x, y, z, rand(-4, 4), rand(0, 5), rand(-4, 4),
+        { r: c.r, g: c.g, b: c.b, life: rand(0.5, 1.0), size0: rand(0.08, 0.14), size1: 0.03, gravity: 12, drag: 1, alpha: 1 });
+    }
+  }
+
   /** Teleport-/Spawn-Effekt */
   spawnFlash(x, y, z, colorHex) {
     const c = this._col.setHex(colorHex);
@@ -566,6 +837,8 @@ export class Effects {
   update(dt, camera) {
     this.sparks.update(dt);
     this.smoke.update(dt);
+    this.bits.update(dt);
+    if (this.rain && camera) this._rainUpdate(dt, camera.position);
 
     for (let i = 0; i < this.tracers.length; i++) {
       const t = this.tracers[i];
@@ -614,6 +887,7 @@ export class Effects {
   clear() {
     this.sparks.clear();
     this.smoke.clear();
+    this.bits.clear();
     for (const d of this.decals) { d.life = 0; d.mesh.visible = false; }
     for (const d of this.bloods) { d.life = 0; d.mesh.visible = false; }
     for (const t of this.tracers) { t.life = 0; t.mesh.visible = false; }
@@ -622,9 +896,11 @@ export class Effects {
   }
 
   dispose() {
-    this.scene.remove(this.sparks.points, this.smoke.points, this.decalGroup, this.tracerGroup, this.bloodGroup);
+    this.setRain(false);
+    this.scene.remove(this.sparks.points, this.smoke.points, this.bits.points, this.decalGroup, this.tracerGroup, this.bloodGroup);
     this.sparks.points.material.dispose(); this.sparks.geo.dispose();
     this.smoke.points.material.dispose(); this.smoke.geo.dispose();
+    this.bits.points.material.dispose(); this.bits.geo.dispose();
     for (const d of this.decals) d.mesh.material.dispose();
     for (const d of this.bloods) d.mesh.material.dispose();
     for (const t of this.bloodTex) t.dispose();

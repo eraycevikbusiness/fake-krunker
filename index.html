@@ -29,12 +29,13 @@
 <!-- ================= HUD ================= -->
 <div id="hud" class="hidden">
 
-  <div id="crosshair">
-    <div class="ch ch-t"></div><div class="ch ch-b"></div>
-    <div class="ch ch-l"></div><div class="ch ch-r"></div>
-    <div class="ch-dot"></div>
-  </div>
+  <canvas id="crosshair" width="160" height="160"></canvas>
   <div id="hitmarker"><span>&#10006;</span></div>
+  <div id="train-hud" class="hidden">
+    <div id="tr-name">GRIDSHOT</div>
+    <div id="tr-stats"></div>
+    <div id="tr-msg" class="hidden"></div>
+  </div>
   <div id="scope" class="hidden"><div class="scope-ring"></div><div class="scope-h"></div><div class="scope-v"></div></div>
 
   <div id="dmg-dirs"></div>
@@ -54,6 +55,10 @@
   </div>
 
   <div id="killcam" class="hidden">KILLCAM &middot; <span id="killcam-name"></span></div>
+  <div id="obj-hud" class="hidden"><div id="obj-line"></div><div id="obj-sub"></div></div>
+  <div id="prompt" class="hidden"><b>E</b> SEILBAHN</div>
+  <div id="chat"></div>
+  <div id="carry-banner" class="hidden">DU TR&Auml;GST DIE FLAGGE &middot; ZUR&Uuml;CK ZUR BASIS</div>
 
   <div id="hud-br">
     <div id="dash-ind" class="hidden"><b>E</b> DASH<div class="dash-bar"><div id="dash-fill"></div></div></div>
@@ -75,9 +80,9 @@
   <div id="killfeed"></div>
 
   <div id="matchbar">
-    <div class="team t-red"><span id="score-red">0</span></div>
+    <div class="team t-red"><span id="score-red">0</span><i class="you">DU</i></div>
     <div id="timer">10:00</div>
-    <div class="team t-blue"><span id="score-blue">0</span></div>
+    <div class="team t-blue"><span id="score-blue">0</span><i class="you">DU</i></div>
   </div>
 
   <div id="toasts"></div>
@@ -87,6 +92,8 @@
   <div id="hud-tl">
     <div id="ks-line" class="hidden"><span id="ks-count">0</span> KILLSTREAK</div>
     <div id="stat-line">K <b id="st-k">0</b> &middot; D <b id="st-d">0</b> &middot; SCORE <b id="st-s">0</b></div>
+    <div id="streaks" class="hidden"></div>
+    <div id="ffa-board" class="hidden"></div>
   </div>
 </div>
 
@@ -122,6 +129,8 @@
       <button class="tab active" data-tab="play">SPIELEN</button>
       <button class="tab" data-tab="class">KLASSEN</button>
       <button class="tab" data-tab="skins">SKINS</button>
+      <button class="tab" data-tab="char">CHARAKTER</button>
+      <button class="tab" data-tab="training">TRAINING</button>
       <button class="tab" data-tab="settings">EINSTELLUNGEN</button>
       <button class="tab" data-tab="controls">STEUERUNG</button>
     </div>
@@ -135,12 +144,29 @@
           <select id="opt-mode">
             <option value="tdm">Team Deathmatch</option>
             <option value="ffa">Free For All</option>
+            <option value="gungame">Gun Game</option>
+            <option value="ctf">Capture the Flag</option>
+            <option value="hardpoint">Hardpoint</option>
+            <option value="infection">Infection</option>
+            <option value="sd">Search &amp; Destroy</option>
           </select>
+          <p id="mode-desc" class="dim tip" style="margin:4px 0 0;font-size:12px"></p>
           <label>KARTE</label>
           <select id="opt-map">
             <option value="sandstorm">Sandstorm</option>
             <option value="burg">Burg</option>
             <option value="citadel">Citadel</option>
+            <option value="hafen">Hafen</option>
+            <option value="dschungel">Dschungel</option>
+          </select>
+          <label>WETTER / TAGESZEIT</label>
+          <select id="opt-weather">
+            <option value="clear">Klar</option>
+            <option value="dusk">Abend</option>
+            <option value="rain">Regen</option>
+            <option value="fog">Nebel</option>
+            <option value="night">Nacht (Laternen)</option>
+            <option value="storm">Gewitternacht</option>
           </select>
         </div>
         <div class="pcard">
@@ -155,6 +181,8 @@
         </div>
       </div>
       <button id="btn-play" class="big-btn">SPIEL STARTEN</button>
+      <button id="btn-replay-load" class="small-btn">REPLAY LADEN (.json)</button>
+      <input id="replay-file" type="file" accept=".json,application/json" class="hidden" />
     </div>
 
     <div class="tabpane" id="pane-class">
@@ -172,9 +200,49 @@
           <canvas id="skin-preview"></canvas>
           <div id="skin-caption"><b id="skin-wname">ASSAULT RIFLE</b><span id="skin-sname">Standard</span></div>
           <p class="dim tip" style="margin-top:8px">Ziehen dreht die Waffe. Skins gelten f&uuml;r Ego- und Fremdansicht.</p>
+          <div class="sticker-head">STICKER</div>
+          <div id="sticker-list"></div>
         </div>
         <div id="skin-list"></div>
       </div>
+    </div>
+
+    <div class="tabpane" id="pane-char">
+      <div class="char-layout">
+        <div class="char-col">
+          <div class="cos-head">OUTFIT</div>
+          <div id="char-outfits" class="cos-list"></div>
+        </div>
+        <div class="skin-center">
+          <canvas id="char-preview"></canvas>
+          <div id="char-caption"><b>TEAM</b><span>Ohne</span></div>
+          <p class="dim tip" style="margin-top:8px">Ziehen dreht die Figur. Im Teammodus bleiben Schulterband und Kopfbedeckung in Teamfarbe.</p>
+        </div>
+        <div class="char-col">
+          <div class="cos-head">KOPFBEDECKUNG</div>
+          <div id="char-hats" class="cos-list cos-grid"></div>
+        </div>
+      </div>
+      <div class="char-bottom">
+        <div>
+          <div class="cos-head">KILL-EFFEKT <span class="dim">spielt beim Gegner, den du eliminierst</span></div>
+          <div id="char-effects" class="cos-list cos-row"></div>
+        </div>
+        <div>
+          <div class="cos-head">KILL-ICON <span class="dim">im Killfeed neben deinem Namen</span></div>
+          <div id="char-icons" class="cos-list cos-row"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="tabpane" id="pane-training">
+      <p class="dim tip" style="margin:0 0 14px">Aim-Trainer auf dem Schie&szlig;stand: keine Gegner, unbegrenzte Munition, Waffen deiner Klasse. Bestwerte werden pro Drill, Zielgr&ouml;&szlig;e und Distanz gespeichert.</p>
+      <div id="drill-grid"></div>
+      <div class="train-opts">
+        <div><label>ZIELGR&Ouml;&szlig;E</label><select id="tr-size"></select></div>
+        <div><label>DISTANZ</label><select id="tr-dist"></select></div>
+      </div>
+      <button id="btn-train" class="big-btn">TRAINING STARTEN</button>
     </div>
 
     <div class="tabpane" id="pane-settings">
@@ -196,6 +264,10 @@
         <div><kbd>Q</kbd><span>Letzte Waffe</span></div>
         <div><kbd>F</kbd><span>Tippen: Nahkampf-Schlag &middot; Halten: Waffe inspizieren</span></div>
         <div><kbd>E</kbd><span>Dash (Klassen mit Dash-Perk, auch in der Luft)</span></div>
+        <div><kbd>4</kbd><span>Luftschlag auf den Blickpunkt (Killstreak ab 7 Kills)</span></div>
+        <div><kbd>X / MITTLERE MAUS</kbd><span>Enterhaken (Hunter, Agent, Archer): an Wand oder Decke schie&szlig;en, ranziehen, Leertaste = loslassen</span></div>
+        <div><kbd>E</kbd><span>Am Seilbahn-Pfosten: einh&auml;ngen &middot; bei liegender Waffe: aufheben &middot; S&amp;D: Bombe legen / entsch&auml;rfen (halten)</span></div>
+        <div><kbd>LINKS HALTEN</kbd><span>Bogen spannen &middot; loslassen = Schuss. Minigun l&auml;uft an, bevor sie feuert</span></div>
         <div><kbd>WAND</kbd><span>Wandlauf: schr&auml;g an eine Wand springen (Agent, Ninja) &middot; Leertaste = Wandsprung</span></div>
         <div><kbd>G</kbd><span>Granate werfen</span></div>
         <div><kbd>TAB</kbd><span>Rangliste</span></div>
@@ -240,6 +312,10 @@
     <div id="end-board"></div>
     <div class="end-btns">
       <button id="btn-again" class="big-btn">NOCHMAL SPIELEN</button>
+      <div class="end-row">
+        <button id="btn-replay" class="small-btn">&#9654; REPLAY ANSEHEN</button>
+        <button id="btn-replay-save" class="small-btn">REPLAY SPEICHERN</button>
+      </div>
       <button id="btn-tomenu" class="small-btn">ZUM MEN&Uuml;</button>
     </div>
   </div>
@@ -247,6 +323,13 @@
 
 <div id="perf" class="hidden"></div>
 <div id="click-hint" class="hidden">KLICKEN ZUM SPIELEN</div>
+
+<!-- ================= REPLAY ================= -->
+<div id="replay-bar" class="hidden">
+  <div class="rp-top"><span id="rp-state">REPLAY</span><span id="rp-time">0:00 / 0:00</span><span id="rp-speed">1×</span></div>
+  <div class="rp-track"><div id="rp-fill"></div></div>
+  <div class="rp-help">LEERTASTE Pause &middot; &larr; &rarr; &plusmn;5 s &middot; 1&ndash;4 Tempo &middot; R Anfang &middot; WASD + Maus Flugkamera (E/C hoch/runter, Shift schnell) &middot; ESC beenden</div>
+</div>
 
 <script type="module" src="./src/main.js"></script>
 </body>

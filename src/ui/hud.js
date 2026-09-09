@@ -6,20 +6,20 @@
 import * as THREE from 'three';
 import { settings } from '../core/settings.js';
 import { clamp, formatTime } from '../core/utils.js';
+import { drawCrosshair, crosshairKey } from './crosshair.js';
+import { MODE_BY_ID } from '../game/modes.js';
 
 const $ = (id) => document.getElementById(id);
+const CROSS_PX = 160;
+const TEAM_NAME = { red: 'ROT', blue: 'BLAU' };
 
 export class HUD {
   constructor() {
     this.el = {
       hud: $('hud'),
       cross: $('crosshair'),
-      chT: document.querySelector('#crosshair .ch-t'),
-      chB: document.querySelector('#crosshair .ch-b'),
-      chL: document.querySelector('#crosshair .ch-l'),
-      chR: document.querySelector('#crosshair .ch-r'),
-      chDot: document.querySelector('#crosshair .ch-dot'),
       hitmarker: $('hitmarker'),
+      trainHud: $('train-hud'), trName: $('tr-name'), trStats: $('tr-stats'), trMsg: $('tr-msg'),
       scope: $('scope'),
       dmgVig: $('dmg-vignette'),
       dmgDirs: $('dmg-dirs'),
@@ -48,7 +48,13 @@ export class HUD {
       speedo: $('speedo'),
       killcam: $('killcam'), killcamName: $('killcam-name'),
       dashInd: $('dash-ind'), dashFill: $('dash-fill'),
+      teamRed: document.querySelector('#matchbar .t-red'), teamBlue: document.querySelector('#matchbar .t-blue'),
+      objHud: $('obj-hud'), objLine: $('obj-line'), objSub: $('obj-sub'),
+      streaks: $('streaks'), board: $('ffa-board'), carry: $('carry-banner'),
+      prompt: $('prompt'), chat: $('chat'),
+      replay: $('replay-bar'), rpTime: $('rp-time'), rpFill: $('rp-fill'), rpSpeed: $('rp-speed'), rpState: $('rp-state'),
     };
+    this.chatItems = [];
     this.slotEls = Array.from(document.querySelectorAll('#slots .slot'));
 
     this.popups = [];
@@ -64,6 +70,16 @@ export class HUD {
     this._c = {};            // Cache fuer zuletzt geschriebene DOM-Werte
     this._perfShown = false;
     this._perfText = '';
+
+    // Fadenkreuz als Canvas (unterstuetzt Kreis, X, T, Punkt ...)
+    this._crossCtx = null;
+    this._crossDpr = 1;
+    if (this.el.cross && this.el.cross.getContext) {
+      this._crossDpr = Math.min(2, window.devicePixelRatio || 1);
+      this.el.cross.width = CROSS_PX * this._crossDpr;
+      this.el.cross.height = CROSS_PX * this._crossDpr;
+      this._crossCtx = this.el.cross.getContext('2d');
+    }
   }
 
   show(v) { this.el.hud.classList.toggle('hidden', !v); }
@@ -94,24 +110,16 @@ export class HUD {
       this._crossHidden = hidden;
       c.cross.style.display = hidden ? 'none' : '';
     }
-    if (hidden) return;
+    if (hidden || !this._crossCtx) return;
 
-    const size = settings.crossSize;
-    const gap = settings.crossGap + spreadPx;
-    const col = settings.crossColor;
-
-    const key = size + '|' + Math.round(gap * 2) + '|' + col + '|' + settings.crossDot;
+    const key = crosshairKey(settings, spreadPx, !!hitTint);
     if (key !== this._lastCross) {
       this._lastCross = key;
-      c.chT.style.height = size + 'px'; c.chB.style.height = size + 'px';
-      c.chL.style.width = size + 'px'; c.chR.style.width = size + 'px';
-      c.chT.style.bottom = gap + 'px'; c.chB.style.top = gap + 'px';
-      c.chL.style.right = gap + 'px'; c.chR.style.left = gap + 'px';
-      for (const e of [c.chT, c.chB, c.chL, c.chR]) e.style.background = col;
-      c.chDot.style.background = col;
-      c.chDot.style.display = settings.crossDot ? '' : 'none';
+      const ctx = this._crossCtx;
+      const dpr = this._crossDpr;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      drawCrosshair(ctx, CROSS_PX, CROSS_PX, settings, spreadPx, !!hitTint);
     }
-    this._cls('crossHit', c.cross, 'hit', !!hitTint);
   }
 
   setScope(on) { this._cls('scope', this.el.scope, 'hidden', !on); }
@@ -209,6 +217,23 @@ export class HUD {
     if (name) this._txt('kcn', e.killcamName, name);
   }
 
+  /** Trainings-Anzeige (name = null blendet aus) */
+  setTraining(name) {
+    const e = this.el;
+    if (!e.trainHud) return;
+    this._cls('trH', e.trainHud, 'hidden', !name);
+    if (name) this._txt('trN', e.trName, name);
+    // Im Training keine Kill-/Score-Zeile
+    if (e.stK) this._cls('trStat', e.stK.parentElement, 'hidden', !!name);
+  }
+  updateTraining(stats, msg) {
+    const e = this.el;
+    if (!e.trainHud) return;
+    this._txt('trS', e.trStats, stats || '');
+    this._txt('trM', e.trMsg, msg || '');
+    this._cls('trMH', e.trMsg, 'hidden', !msg);
+  }
+
   updateStats(p) {
     this._txt('k', this.el.stK, String(p.kills));
     this._txt('d', this.el.stD, String(p.deaths));
@@ -219,7 +244,7 @@ export class HUD {
 
   updateMatch(mode, redScore, blueScore, timeLeft) {
     const e = this.el;
-    const ffa = mode === 'ffa';
+    const ffa = mode === 'ffa' || mode === 'training' || mode === 'gungame';
     this._style('tr', e.scoreRed.parentElement, 'display', ffa ? 'none' : '');
     this._style('tb', e.scoreBlue.parentElement, 'display', ffa ? 'none' : '');
     if (!ffa) {
@@ -230,14 +255,105 @@ export class HUD {
     this._cls('tu', e.timer, 'urgent', timeLeft <= 30);
   }
 
+  /** Eigenes Team in der Match-Leiste markieren ("DU"), null = kein Teammodus */
+  setMyTeam(team) {
+    const e = this.el;
+    if (!e.teamRed || !e.teamBlue) return;
+    this._cls('mtR', e.teamRed, 'mine', team === 'red');
+    this._cls('mtB', e.teamBlue, 'mine', team === 'blue');
+    if (e.hud) {
+      this._cls('hudR', e.hud, 'team-red', team === 'red');
+      this._cls('hudB', e.hud, 'team-blue', team === 'blue');
+    }
+  }
+
+  /** Missionsziel-Zeile (CTF/Hardpoint/Gun Game); o = {line, sub, carry, inZone} oder null */
+  updateObjective(o) {
+    const e = this.el;
+    if (!e.objHud) return;
+    this._cls('objH', e.objHud, 'hidden', !o);
+    if (!o) { if (e.carry) this._cls('carryH', e.carry, 'hidden', true); return; }
+    this._txt('objL', e.objLine, o.line || '');
+    this._txt('objS', e.objSub, o.sub || '');
+    this._cls('objZ', e.objHud, 'inzone', !!o.inZone);
+    if (e.carry) this._cls('carryH', e.carry, 'hidden', !o.carry);
+  }
+
+  /** Replay-Leiste */
+  showReplay(v) { if (this.el.replay) this.el.replay.classList.toggle('hidden', !v); }
+  updateReplay(t, total, speed, paused) {
+    const e = this.el;
+    if (!e.replay) return;
+    this._txt('rpT', e.rpTime, formatTime(t) + ' / ' + formatTime(total));
+    this._style('rpF', e.rpFill, 'width', (total > 0 ? Math.round(t / total * 1000) / 10 : 0) + '%');
+    this._txt('rpS', e.rpSpeed, speed + '×');
+    this._txt('rpP', e.rpState, paused ? 'PAUSE' : 'REPLAY');
+  }
+
+  /** Interaktions-Hinweis unter dem Fadenkreuz ('' blendet aus) */
+  setPrompt(text) {
+    const e = this.el;
+    if (!e.prompt) return;
+    this._cls('prH', e.prompt, 'hidden', !text);
+    if (text) e.prompt.innerHTML = '<b>E</b> ' + escapeHtml(text);
+  }
+
+  /** Chat-Zeile (Bots): name in Teamfarbe, Text */
+  chat(name, text, team, isMe) {
+    const e = this.el;
+    if (!e.chat) return;
+    const div = document.createElement('div');
+    div.className = 'chat-line';
+    const cls = team === 'red' ? 'n-red' : team === 'blue' ? 'n-blue' : '';
+    div.innerHTML = `<span class="${cls}${isMe ? ' n-me' : ''}">${escapeHtml(name)}</span>: ${escapeHtml(text)}`;
+    e.chat.appendChild(div);
+    this.chatItems.push({ el: div, t: 9 });
+    while (this.chatItems.length > 6) { const o = this.chatItems.shift(); o.el.remove(); }
+  }
+
+  /** Aktive Killstreak-Belohnungen */
+  updateStreaks(p, time) {
+    const e = this.el;
+    if (!e.streaks) return;
+    if (!p) { this._txt('stk', e.streaks, ''); this._cls('stkH', e.streaks, 'hidden', true); return; }
+    const parts = [];
+    if (p.uavUntil > time) parts.push('UAV ' + Math.ceil(p.uavUntil - time) + 's');
+    if (p.shield > 0) parts.push('SCHILD ' + Math.ceil(p.shield));
+    if (p.airstrikes > 0) parts.push('LUFTSCHLAG [4]' + (p.airstrikes > 1 ? ' ×' + p.airstrikes : ''));
+    const txt = parts.join('  ·  ');
+    this._txt('stk', e.streaks, txt);
+    this._cls('stkH', e.streaks, 'hidden', !txt);
+  }
+
+  /** Bestenliste (FFA / Gun Game): Top 3 + eigener Platz */
+  updateBoard(game) {
+    const e = this.el;
+    if (!e.board) return;
+    if (!game) { this._cls('bdH', e.board, 'hidden', true); return; }
+    this._cls('bdH', e.board, 'hidden', false);
+    const gg = game.mode === 'gungame';
+    const sorted = game.actors.slice().sort((a, b) => (gg ? b.ggLevel - a.ggLevel : 0) || b.kills - a.kills || b.score - a.score);
+    const me = game.player;
+    const rank = sorted.indexOf(me) + 1;
+    const val = (a) => gg ? 'ST ' + (a.ggLevel + 1) : a.kills;
+    let html = '';
+    for (let i = 0; i < Math.min(3, sorted.length); i++) {
+      const a = sorted[i];
+      html += `<div class="bd-row${a === me ? ' me' : ''}"><span>${i + 1}.</span><span class="nm">${escapeHtml(a.name)}</span><b>${val(a)}</b></div>`;
+    }
+    if (rank > 3) html += `<div class="bd-row me"><span>${rank}.</span><span class="nm">${escapeHtml(me.name)}</span><b>${val(me)}</b></div>`;
+    if (this._c.bdHtml !== html) { this._c.bdHtml = html; e.board.innerHTML = html; }
+  }
+
   // --------------------------------------------------------
   // Killfeed
   // --------------------------------------------------------
-  addKillfeed(killerName, killerTeam, victimName, victimTeam, weaponName, headshot, isMe, isSuicide) {
+  addKillfeed(killerName, killerTeam, victimName, victimTeam, weaponName, headshot, isMe, isSuicide, icon) {
     const div = document.createElement('div');
     div.className = 'kf';
     const cls = (t) => (t === 'red' ? 'n-red' : t === 'blue' ? 'n-blue' : '');
     const me = (b) => (b ? ' n-me' : '');
+    const ico = icon ? `<span class="kf-ico">${escapeHtml(icon)}</span>` : '';
 
     if (isSuicide) {
       div.innerHTML =
@@ -246,6 +362,7 @@ export class HUD {
     } else {
       div.innerHTML =
         `<span class="${cls(killerTeam)}${me(isMe === 'killer')}">${escapeHtml(killerName)}</span>` +
+        ico +
         `<span class="kf-w">${escapeHtml(weaponName)}</span>` +
         (headshot ? '<span class="kf-hs">HS</span>' : '') +
         `<span class="${cls(victimTeam)}${me(isMe === 'victim')}">${escapeHtml(victimName)}</span>`;
@@ -260,9 +377,9 @@ export class HUD {
     }
   }
 
-  toast(text, small) {
+  toast(text, small, team) {
     const div = document.createElement('div');
-    div.className = 'toast' + (small ? ' small' : '');
+    div.className = 'toast' + (small ? ' small' : '') + (team ? ' t-' + team : '');
     div.textContent = text;
     this.el.toasts.appendChild(div);
     this.toastItems.push({ el: div, t: small ? 1.8 : 2.4 });
@@ -343,6 +460,14 @@ export class HUD {
       if (t.t <= 0) { t.el.remove(); this.toastItems.splice(i, 1); }
     }
 
+    // Chat
+    for (let i = this.chatItems.length - 1; i >= 0; i--) {
+      const c = this.chatItems[i];
+      c.t -= dt;
+      if (c.t < 1) c.el.classList.add('fade');
+      if (c.t <= 0) { c.el.remove(); this.chatItems.splice(i, 1); }
+    }
+
     // Trefferrichtungen
     for (let i = this.dmgDirs.length - 1; i >= 0; i--) {
       const d = this.dmgDirs[i];
@@ -361,6 +486,8 @@ export class HUD {
     this.toastItems.length = 0;
     for (const d of this.dmgDirs) d.el.remove();
     this.dmgDirs.length = 0;
+    for (const c of this.chatItems) c.el.remove();
+    this.chatItems.length = 0;
     this._c = {};
     this._lastCross = '';
     this._crossHidden = null;
@@ -378,9 +505,16 @@ export class HUD {
     } else {
       this.el.deathBy.textContent = weaponName || '';
     }
-    this.el.respawnT.textContent = t.toFixed(1);
+    const timerEl = this.el.respawnT.parentElement;
+    if (!isFinite(t) || t > 1000) {
+      timerEl.innerHTML = 'Zuschauer bis zum Rundenende';
+      this._noRespawnTimer = true;
+    } else {
+      if (this._noRespawnTimer) { timerEl.innerHTML = 'Respawn in <span id="respawn-t">3.0</span>s'; this.el.respawnT = $('respawn-t'); this._noRespawnTimer = false; }
+      this.el.respawnT.textContent = t.toFixed(1);
+    }
   }
-  updateDeathTimer(t) { this._txt('rt', this.el.respawnT, Math.max(0, t).toFixed(1)); }
+  updateDeathTimer(t) { if (!this._noRespawnTimer && t < 1000) this._txt('rt', this.el.respawnT, Math.max(0, t).toFixed(1)); }
   hideDeath() { this.el.death.classList.add('hidden'); }
 
   // --------------------------------------------------------
@@ -390,7 +524,7 @@ export class HUD {
 
   renderScoreboard(game) {
     const e = this.el;
-    e.sbMode.textContent = game.mode === 'ffa' ? 'FREE FOR ALL' : 'TEAM DEATHMATCH';
+    e.sbMode.textContent = game.mode === 'training' ? 'TRAINING' : (MODE_BY_ID[game.mode] ? MODE_BY_ID[game.mode].name.toUpperCase() : 'TEAM DEATHMATCH');
     e.sbMap.textContent = game.world ? game.world.map.name : '';
 
     const rows = (list) => list.map((a) => {
@@ -403,7 +537,7 @@ export class HUD {
 
     const sortFn = (a, b) => b.score - a.score || b.kills - a.kills || a.deaths - b.deaths;
 
-    if (game.mode === 'ffa') {
+    if (!game.teamMode || game.mode === 'training') {
       const all = game.actors.slice().sort(sortFn);
       document.querySelector('.sb-team.blue').style.display = 'none';
       document.querySelector('.sb-team.red').classList.add('ffa');
@@ -413,13 +547,16 @@ export class HUD {
     } else {
       document.querySelector('.sb-team.blue').style.display = '';
       document.querySelector('.sb-team.red').classList.remove('ffa');
+      const mine = game.player ? game.player.team : null;
+      const nameR = game.teamName ? game.teamName('red') : 'ROT', nameB = game.teamName ? game.teamName('blue') : 'BLAU';
       document.querySelector('.sb-team.red .sb-team-head').innerHTML =
-        `ROT <span id="sb-red-score">${game.scores.red}</span>`;
+        `${nameR}${mine === 'red' ? ' <i class="you">DEIN TEAM</i>' : ''} <span id="sb-red-score">${game.scores.red}</span>`;
+      document.querySelector('.sb-team.blue .sb-team-head').innerHTML =
+        `${nameB}${mine === 'blue' ? ' <i class="you">DEIN TEAM</i>' : ''} <span id="sb-blue-score">${game.scores.blue}</span>`;
       const red = game.actors.filter(a => a.team === 'red').sort(sortFn);
       const blue = game.actors.filter(a => a.team === 'blue').sort(sortFn);
       e.sbRed.innerHTML = rows(red);
       e.sbBlue.innerHTML = rows(blue);
-      $('sb-blue-score').textContent = game.scores.blue;
     }
   }
 

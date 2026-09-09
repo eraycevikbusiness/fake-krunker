@@ -365,6 +365,94 @@ const PARTS = {
     p(0, 0.03, -0.60, 0.012, 0.010, 0.08, MAT.glow, { x: 0.3 }),
   ],
   katana: katanaParts(),
+  // Recurve-Bogen: Griffstueck (Riser) mit Wurfarmen nach oben/unten, Sehne hinten
+  bow: (() => {
+    const parts = [
+      p(0, 0, 0.02, 0.05, 0.40, 0.08, MAT.body),
+      p(0, -0.03, 0.03, 0.056, 0.18, 0.085, MAT.grip),
+      p(0.028, 0.10, 0.02, 0.006, 0.12, 0.04, MAT.glow),
+      p(0.03, 0.05, -0.03, 0.03, 0.02, 0.05, MAT.metal),           // Pfeilauflage
+      p(0, 0.20, 0.0, 0.05, 0.05, 0.09, MAT.metal),
+      p(0, -0.20, 0.0, 0.05, 0.05, 0.09, MAT.metal),
+    ];
+    for (const s of [1, -1]) {
+      for (let i = 0; i < 3; i++) {
+        const y = s * (0.30 + i * 0.19), z = 0.02 + i * 0.045;
+        parts.push(p(0, y, z, 0.036, 0.21, 0.045, i % 2 ? MAT.wood2 : MAT.dark, { x: -s * (0.12 + i * 0.12) }));
+        parts.push(p(0, y, z, 0.04, 0.05, 0.05, MAT.brass, { x: -s * (0.12 + i * 0.12) }));
+      }
+      parts.push(p(0, s * 0.88, 0.14, 0.03, 0.06, 0.04, MAT.brass, { x: -s * 0.5 }));
+    }
+    parts.push(p(0, 0, 0.155, 0.006, 1.74, 0.006, MAT.chrome));   // Sehne
+    parts.push(p(0, 0.03, 0.155, 0.02, 0.03, 0.02, MAT.red));       // Nockpunkt
+    return parts;
+  })(),
+  arrow: [
+    p(0, 0.03, -0.24, 0.012, 0.012, 0.92, MAT.wood),
+    p(0, 0.03, -0.72, 0.022, 0.032, 0.10, MAT.steel),
+    p(0, 0.03, -0.78, 0.014, 0.018, 0.05, MAT.chrome),
+    p(0.012, 0.03, 0.14, 0.004, 0.04, 0.10, MAT.red, { z: 0.6 }),
+    p(-0.012, 0.03, 0.14, 0.004, 0.04, 0.10, MAT.red, { z: -0.6 }),
+    p(0, 0.055, 0.14, 0.004, 0.04, 0.10, MAT.accent),
+  ],
+  // Flammenwerfer: Tank, Duese mit Zuendflamme, Schlauch, Warnstreifen
+  flame: [
+    p(0, -0.02, 0.18, 0.17, 0.17, 0.52, MAT.red),
+    p(0, -0.02, 0.18, 0.17, 0.17, 0.52, MAT.red, { z: 0.785 }),
+    p(0, -0.02, 0.18, 0.175, 0.035, 0.53, MAT.accent),
+    p(0, -0.02, 0.18, 0.035, 0.175, 0.53, MAT.accent),
+    p(0, -0.02, -0.10, 0.12, 0.12, 0.06, MAT.steelDark),
+    p(0, -0.02, 0.46, 0.12, 0.12, 0.06, MAT.steelDark),
+    p(0, 0.12, 0.22, 0.05, 0.07, 0.05, MAT.brass),                 // Ventil
+    p(0, 0.16, 0.22, 0.10, 0.02, 0.03, MAT.brass),
+    p(0, 0.02, -0.55, 0.05, 0.05, 0.84, MAT.metal),                // Rohr
+    p(0, 0.02, -0.98, 0.085, 0.085, 0.14, MAT.steelDark),          // Duese
+    p(0, 0.02, -0.98, 0.085, 0.085, 0.14, MAT.steelDark, { z: 0.785 }),
+    p(0, 0.02, -1.07, 0.035, 0.035, 0.05, MAT.glowR),              // Zuendflamme
+    p(0, 0.075, -0.75, 0.02, 0.03, 0.3, MAT.metal),
+    p(0.095, -0.06, 0.0, 0.03, 0.03, 0.55, MAT.rubber),            // Schlauch
+    p(0, -0.17, 0.06, 0.06, 0.22, 0.08, MAT.grip, { x: -0.2 }),
+    p(0, -0.13, -0.38, 0.05, 0.17, 0.06, MAT.grip),
+    ...triggerGuard(0.0),
+  ],
+  // Minigun: sechs rotierende Laeufe, Motorblock, Munitionskasten mit Gurt
+  minigun: (() => {
+    const parts = [];
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      parts.push(p(Math.cos(a) * 0.065, Math.sin(a) * 0.065, -0.72, 0.03, 0.03, 1.12, i % 2 ? MAT.steelDark : MAT.steel));
+    }
+    parts.push(p(0, 0, -0.72, 0.035, 0.035, 1.16, MAT.dark));
+    parts.push(p(0, 0, -1.22, 0.18, 0.18, 0.06, MAT.metal));
+    parts.push(p(0, 0, -1.22, 0.18, 0.18, 0.06, MAT.metal, { z: 0.785 }));
+    parts.push(p(0, 0, -0.45, 0.17, 0.17, 0.05, MAT.metal));
+    parts.push(p(0, 0, -0.45, 0.17, 0.17, 0.05, MAT.metal, { z: 0.785 }));
+    parts.push(p(0, 0, -0.10, 0.21, 0.23, 0.36, MAT.body));
+    parts.push(p(0, 0.0, 0.27, 0.17, 0.19, 0.32, MAT.dark));              // Motor
+    parts.push(p(0, -0.03, 0.46, 0.10, 0.10, 0.08, MAT.steelDark));
+    parts.push(p(0.13, -0.12, 0.16, 0.18, 0.2, 0.3, MAT.green));           // Munitionskasten
+    parts.push(p(0.07, -0.02, 0.10, 0.045, 0.06, 0.26, MAT.brass));        // Gurt
+    parts.push(p(0, 0.19, 0.02, 0.05, 0.06, 0.34, MAT.metal));              // Tragegriff
+    parts.push(p(0, 0.145, 0.02, 0.09, 0.02, 0.20, MAT.metal));
+    parts.push(p(-0.11, -0.02, -0.02, 0.02, 0.05, 0.05, MAT.glowR));       // Statusleuchte
+    parts.push(p(0, -0.20, 0.30, 0.065, 0.24, 0.09, MAT.grip, { x: -0.22 }));
+    parts.push(p(-0.02, -0.21, -0.36, 0.06, 0.2, 0.06, MAT.grip));
+    parts.push(...triggerGuard(0.22));
+    return parts;
+  })(),
+  // Wurfmesser: schlank, ausbalanciert, Ring am Griffende
+  tknife: [
+    p(0, 0, -0.18, 0.012, 0.052, 0.38, MAT.steel),
+    p(0, -0.024, -0.18, 0.015, 0.012, 0.38, MAT.chrome),
+    p(0, 0.004, -0.41, 0.011, 0.03, 0.09, MAT.steel, { x: 0.28 }),
+    p(0, -0.012, -0.43, 0.012, 0.012, 0.05, MAT.chrome, { x: 0.5 }),
+    p(0, 0.012, -0.16, 0.014, 0.006, 0.26, MAT.glow),
+    p(0, 0, 0.09, 0.022, 0.05, 0.22, MAT.wrap),
+    p(0, 0, 0.09, 0.024, 0.012, 0.23, MAT.wrap2),
+    p(0, 0, -0.02, 0.026, 0.056, 0.02, MAT.gold),
+    p(0, 0, 0.215, 0.034, 0.064, 0.03, MAT.gold),
+    p(0, 0, 0.245, 0.03, 0.03, 0.02, MAT.gold),
+  ],
   nade: [
     p(0, 0, 0, 0.14, 0.18, 0.14, MAT.green),
     p(0, 0, 0, 0.14, 0.18, 0.14, MAT.green, { y: 0.785 }),
@@ -588,6 +676,100 @@ export const WEAPONS = {
     icon: '⚔',
   }),
 
+  bow: W({
+    id: 'bow', name: 'Recurve Bow', short: 'BOGEN',
+    damage: 110, headMult: 1.9, rpm: 90, auto: false, mag: 1, reserve: 28, reloadTime: 0.55, reloadType: 'single',
+    charge: { time: 0.8, minPower: 0.35 },       // halten = spannen, loslassen = schiessen
+    spread: 0.0015, spreadPerShot: 0.0, spreadMax: 0.02, spreadMove: 0.02, spreadAir: 0.04,
+    recoilV: 0.4, recoilH: 0.1, kick: 0.03,
+    range: 220, falloffStart: 60, falloffEnd: 150, falloffMin: 0.7,
+    adsFov: 0.78, adsTime: 0.2, moveMult: 1.06, adsMoveMult: 0.7, switchTime: 0.5,
+    projectile: { speed: 58, gravity: 13, radius: 0.1, color: 0xc9a55a, glow: false, noTrail: true, arrow: true },
+    parts: PARTS.bow, arrowParts: PARTS.arrow, muzzle: [0, 0.03, -0.75], sightY: 0.02,
+    hold: 'bow',
+    grips: { r: [0, -0.03, 0.03], l: [0, 0.03, 0.17] },
+    pull: [0, 0.03, 0.62],
+    vmScale: 0.62,
+    vmPos: [0.20, -0.24, -0.64],
+    vmRot: [0, 0.10, -0.42],
+    tracer: 0xc9a55a,
+    sound: { kind: 'bow', vol: 0.8, pitch: 1 },
+    icon: '\u{1F3F9}',
+  }),
+  flame: W({
+    id: 'flame', name: 'Flamethrower', short: 'FLAMME',
+    damage: 2.2, headMult: 1.0, legMult: 1.0, rpm: 900, auto: true, mag: 110, reserve: 220, reloadTime: 2.8,
+    flame: true, burn: { time: 2.4, dps: 9 }, pellets: 4,
+    spread: 0.05, spreadPerShot: 0, spreadMax: 0.06, spreadMove: 0.01, spreadAir: 0.02, spreadAds: 1,
+    recoilV: 0.05, recoilH: 0.05, kick: 0.006,
+    range: 11.5, falloffStart: 5, falloffEnd: 11.5, falloffMin: 0.35,
+    adsFov: 1, adsTime: 0.2, moveMult: 0.92, adsMoveMult: 0.9, switchTime: 0.65,
+    parts: PARTS.flame, muzzle: [0, 0.02, -1.1], sightY: 0.05,
+    hold: 'launcher',
+    grips: { r: [0, -0.15, 0.06], l: [0, -0.11, -0.38] },
+    vmPos: [0.22, -0.15, -0.64],
+    sound: { kind: 'flame', vol: 0.55, pitch: 1 },
+    icon: '\u{1F525}',
+  }),
+  minigun: W({
+    id: 'minigun', name: 'Minigun', short: 'MINIGUN',
+    damage: 13, rpm: 1150, auto: true, mag: 120, reserve: 240, reloadTime: 4.4,
+    spinUp: 0.7,                                 // Anlaufzeit, bevor Schuesse fallen
+    spread: 0.022, spreadPerShot: 0.0015, spreadMax: 0.06, spreadMove: 0.02, spreadAir: 0.05, spreadAds: 0.7,
+    recoilV: 0.3, recoilH: 0.35, recoilRecover: 9, kick: 0.025,
+    range: 240, falloffStart: 30, falloffEnd: 110, falloffMin: 0.5,
+    adsFov: 0.88, adsTime: 0.25, moveMult: 0.78, adsMoveMult: 0.8, switchTime: 0.9,
+    parts: PARTS.minigun, muzzle: [0, 0, -1.28], sightY: 0.2,
+    hold: 'launcher',
+    grips: { r: [0, -0.2, 0.3], l: [-0.02, -0.18, -0.36] },
+    vmPos: [0.24, -0.17, -0.66],
+    tracer: 0xffd080, tracerWidth: 0.04,
+    sound: { kind: 'smg', vol: 0.6, pitch: 0.85 },
+    icon: '\u{1F52B}',
+  }),
+  tknife: W({
+    id: 'tknife', name: 'Throwing Knives', short: 'WURFMESSER', slot: 1,
+    damage: 75, headMult: 1.7, rpm: 170, auto: false, mag: 1, reserve: 7, reloadTime: 0.45, reloadType: 'single',
+    throwWeapon: true,
+    spread: 0.002, spreadPerShot: 0, spreadMax: 0.02, spreadMove: 0.015, spreadAir: 0.03,
+    recoilV: 0.2, recoilH: 0.1, kick: 0.02,
+    range: 120, falloffStart: 30, falloffEnd: 90, falloffMin: 0.7,
+    adsFov: 1, adsTime: 0.1, moveMult: 1.2, adsMoveMult: 1, switchTime: 0.3,
+    projectile: { speed: 44, gravity: 10, radius: 0.12, color: 0xd0d8e0, glow: false, noTrail: true, knife: true },
+    parts: PARTS.tknife, muzzle: [0, 0, -0.4],
+    hold: 'knife', equip: 'flip',
+    grips: { r: [0, 0, 0.12], l: null },
+    vmPos: [0.30, -0.28, -0.52],
+    vmRot: [1.15, 0.30, -0.22],
+    sound: { kind: 'throw', vol: 0.6, pitch: 1 },
+    icon: '\u{1F52A}',
+  }),
+
+  claws: W({
+    id: 'claws', name: 'Zombie Claws', short: 'KLAUEN', slot: 2,
+    damage: 40, headMult: 1.3, rpm: 190, auto: true, mag: Infinity, reserve: 0,
+    melee: true, meleeRange: 3.3, meleeArc: 0.6, meleeBackstab: 1.8, swing: 'slash', swingTime: 0.26,
+    heavy: { damage: 70, meleeRange: 3.5, meleeBackstab: 1.4, swing: 'stab', swingTime: 0.5, hitAt: 0.4, lunge: 7 },
+    lunge: 6, knockback: 5,
+    moveMult: 1.12, switchTime: 0.3, adsFov: 1, spread: 0,
+    parts: [
+      p(0, -0.01, 0.12, 0.05, 0.08, 0.2, MAT.grip),
+      p(0.05, 0.0, -0.18, 0.012, 0.03, 0.42, MAT.steelDark, { y: 0.12 }),
+      p(0.0, 0.01, -0.2, 0.012, 0.03, 0.46, MAT.steelDark),
+      p(-0.05, 0.0, -0.18, 0.012, 0.03, 0.42, MAT.steelDark, { y: -0.12 }),
+      p(0.05, -0.012, -0.18, 0.014, 0.008, 0.42, MAT.chrome, { y: 0.12 }),
+      p(0.0, -0.002, -0.2, 0.014, 0.008, 0.46, MAT.chrome),
+      p(-0.05, -0.012, -0.18, 0.014, 0.008, 0.42, MAT.chrome, { y: -0.12 }),
+      p(0, 0.02, -0.42, 0.11, 0.012, 0.03, MAT.glowR),
+    ],
+    muzzle: [0, 0, -0.5],
+    hold: 'knife', equip: 'flip',
+    grips: { r: [0, 0, 0.12], l: null },
+    vmPos: [0.30, -0.28, -0.52],
+    vmRot: [1.15, 0.30, -0.22],
+    icon: '\u{1F9DF}',
+  }),
+
   grenade: W({
     id: 'grenade', name: 'Frag Grenade', short: 'NADE', slot: 3,
     damage: 0, rpm: 60, auto: false, mag: 1, reserve: 0,
@@ -617,8 +799,8 @@ export const CLASSES = [
     id: 'hunter', name: 'Hunter', icon: '\u{1F3AF}',
     desc: 'Ein Treffer, ein Kill. Das Scharfschützengewehr tötet auf jede Distanz mit einem Körpertreffer — wenn du triffst.',
     primary: 'sniper', secondary: 'pistol', melee: 'knife',
-    hp: 100, armor: 0, speed: 1.02, jumps: 1, nades: 1,
-    perks: ['One-Shot-Kill', 'Zielfernrohr', 'Durchschuss'],
+    hp: 100, armor: 0, speed: 1.02, jumps: 1, nades: 1, grapple: true,
+    perks: ['One-Shot-Kill', 'Zielfernrohr', 'Durchschuss', 'Enterhaken (X)'],
     stats: { schaden: 1.0, feuerrate: 0.1, reichweite: 1.0, mobilitaet: 0.62 },
   },
   {
@@ -673,8 +855,8 @@ export const CLASSES = [
     id: 'agent', name: 'Agent', icon: '\u{1F576}',
     desc: 'Zwei Uzis, absurde Feuerrate, maximale Mobilität. Nachladen dauert allerdings ewig.',
     primary: 'akimbo', secondary: 'pistol', melee: 'katana',
-    hp: 85, armor: 0, speed: 1.2, jumps: 2, nades: 2, dash: true, wallrun: true,
-    perks: ['Doppelsprung', 'Dash (E)', 'Wandlauf', 'Katana'],
+    hp: 85, armor: 0, speed: 1.2, jumps: 2, nades: 2, dash: true, wallrun: true, grapple: true,
+    perks: ['Doppelsprung', 'Dash (E)', 'Wandlauf', 'Enterhaken (X)', 'Katana'],
     stats: { schaden: 0.35, feuerrate: 1.0, reichweite: 0.28, mobilitaet: 1.0 },
   },
   {
@@ -687,12 +869,147 @@ export const CLASSES = [
   },
   {
     id: 'ninja', name: 'Ninja', icon: '\u{1F977}',
-    desc: 'Katana und Alien Blaster. Dreifachsprung, leise Schritte, extreme Beweglichkeit.',
-    primary: 'crossbow', secondary: 'pistol', melee: 'katana',
+    desc: 'Katana, Alien Blaster und Wurfmesser. Dreifachsprung, leise Schritte, extreme Beweglichkeit.',
+    primary: 'crossbow', secondary: 'tknife', melee: 'katana',
     hp: 85, armor: 0, speed: 1.22, jumps: 3, nades: 1, dash: true, wallrun: true,
-    perks: ['Dreifachsprung', 'Wandlauf', 'Dash (E)', 'Leise'],
+    perks: ['Dreifachsprung', 'Wandlauf', 'Dash (E)', 'Wurfmesser', 'Leise'],
     stats: { schaden: 0.66, feuerrate: 0.4, reichweite: 0.5, mobilitaet: 1.0 },
   },
+  {
+    id: 'archer', name: 'Archer', icon: '\u{1F3F9}',
+    desc: 'Recurve-Bogen: Maustaste halten spannt, loslassen schießt. Voll gespannt tötet ein Pfeil mit einem Treffer. Dazu Wurfmesser.',
+    primary: 'bow', secondary: 'tknife', melee: 'knife',
+    hp: 100, armor: 0, speed: 1.08, jumps: 2, nades: 1, grapple: true,
+    perks: ['Bogen: halten + loslassen', 'Pfeil-Flugbahn', 'Wurfmesser', 'Enterhaken (X)', 'Doppelsprung'],
+    stats: { schaden: 0.95, feuerrate: 0.2, reichweite: 0.8, mobilitaet: 0.8 },
+  },
+  {
+    id: 'pyro', name: 'Pyro', icon: '\u{1F525}',
+    desc: 'Flammenwerfer mit Brandschaden: Wer brennt, verliert weiter Leben. Kurze Reichweite, dafür Rüstung.',
+    primary: 'flame', secondary: 'pistol', melee: 'knife',
+    hp: 115, armor: 20, speed: 0.98, jumps: 1, nades: 2,
+    perks: ['Flammenwerfer', 'Brandschaden', '+15 HP', '+20 Rüstung'],
+    stats: { schaden: 0.75, feuerrate: 1.0, reichweite: 0.1, mobilitaet: 0.55 },
+  },
+  {
+    id: 'juggernaut', name: 'Juggernaut', icon: '\u{1F9BE}',
+    desc: 'Minigun mit Anlaufzeit und 120 Schuss. 150 HP und 50 Rüstung, dafür der Langsamste im Match.',
+    primary: 'minigun', secondary: 'pistol', melee: 'knife',
+    hp: 150, armor: 50, speed: 0.84, jumps: 1, nades: 1,
+    perks: ['Minigun (Anlaufzeit)', '+50 HP', '+50 Rüstung', 'Sehr langsam'],
+    stats: { schaden: 0.8, feuerrate: 1.0, reichweite: 0.65, mobilitaet: 0.2 },
+  },
+];
+
+// ------------------------------------------------------------
+// Aufsaetze: veraendern Werte und haengen Bauteile an. Max. zwei pro Waffe.
+// applyAttachments() liefert eine abgeleitete Waffe (gleiche id, eigene parts).
+// ------------------------------------------------------------
+const NO_ATT = (w) => w.melee || w.throwWeapon || w.charge || w.id === 'grenade';
+export const ATTACHMENTS = [
+  {
+    id: 'suppressor', name: 'Schalldämpfer', icon: '🔇',
+    desc: 'Leiser, kein Mündungsfeuer, Bots hören dich kaum. −8 % Schaden',
+    fits: (w) => !NO_ATT(w) && !w.flame && !w.projectile && w.id !== 'minigun',
+    apply: (w) => {
+      w.damage *= 0.92;
+      w.sound = Object.assign({}, w.sound, { vol: (w.sound.vol || 1) * 0.32, pitch: (w.sound.pitch || 1) * 1.18 });
+      w.suppressed = true;
+      const m = w.muzzle;
+      w.parts.push(p(m[0], m[1], m[2] - 0.15, 0.062, 0.062, 0.34, MAT.dark), p(m[0], m[1], m[2] - 0.15, 0.062, 0.062, 0.34, MAT.dark, { z: 0.785 }),
+        p(m[0], m[1], m[2] - 0.31, 0.05, 0.05, 0.02, MAT.black));
+      w.muzzle = [m[0], m[1], m[2] - 0.33];
+    },
+  },
+  {
+    id: 'scope', name: 'Visier', icon: '🔭',
+    desc: 'Mehr Zoom und ruhigeres Zielen im ADS, minimal langsamer',
+    fits: (w) => !NO_ATT(w) && !w.flame && w.hold !== 'akimbo',
+    apply: (w) => {
+      w.adsFov *= 0.78;
+      w.spreadAds *= 0.6;
+      w.adsTime += 0.04;
+      const y = (w.sightY !== undefined ? w.sightY : 0.11) + 0.02;
+      const z = w.hold === 'pistol' ? -0.05 : -0.12;
+      w.parts.push(p(0, y + 0.03, z, 0.05, 0.05, 0.22, MAT.dark), p(0, y + 0.03, z, 0.05, 0.05, 0.22, MAT.dark, { z: 0.785 }),
+        p(0, y + 0.03, z - 0.115, 0.035, 0.035, 0.012, MAT.glow), p(0, y + 0.005, z, 0.02, 0.03, 0.06, MAT.metal));
+      w.sightY = y + 0.06;
+    },
+  },
+  {
+    id: 'extmag', name: 'Erweitertes Magazin', icon: '📦',
+    desc: '+40 % Magazin, +20 % Reserve, Nachladen 15 % langsamer',
+    fits: (w) => !NO_ATT(w) && w.mag !== Infinity && w.mag >= 4,
+    apply: (w) => {
+      w.mag = Math.round(w.mag * 1.4);
+      w.reserve = Math.round(w.reserve * 1.2);
+      w.reloadTime *= 1.15;
+      const gz = (w.grips && w.grips.r) ? w.grips.r[2] : 0.1;
+      w.parts.push(p(0, -0.34, gz - 0.24, 0.06, 0.16, 0.1, MAT.dark), p(0, -0.42, gz - 0.24, 0.065, 0.02, 0.11, MAT.metal));
+    },
+  },
+  {
+    id: 'grip', name: 'Griff', icon: '✊',
+    desc: '−25 % Rückstoß, −30 % Streuung in Bewegung',
+    fits: (w) => !NO_ATT(w) && w.hold !== 'pistol' && w.hold !== 'akimbo' && !w.flame,
+    apply: (w) => {
+      w.recoilV *= 0.75; w.recoilH *= 0.75;
+      w.spreadMove *= 0.7; w.spreadPerShot *= 0.85;
+      const gl = (w.grips && w.grips.l) ? w.grips.l : [0, -0.06, -0.6];
+      w.parts.push(p(0, gl[1] - 0.09, gl[2], 0.05, 0.16, 0.06, MAT.grip, { x: -0.15 }));
+      w.grips = { r: w.grips.r, l: [gl[0], gl[1] - 0.12, gl[2]] };
+    },
+  },
+  {
+    id: 'laser', name: 'Laser', icon: '🔴',
+    desc: '−35 % Hüftstreuung, Waffenwechsel 15 % schneller',
+    fits: (w) => !NO_ATT(w) && !w.flame,
+    apply: (w) => {
+      w.spread *= 0.65; w.spreadMax *= 0.8;
+      w.switchTime *= 0.85;
+      const z = w.hold === 'pistol' ? -0.25 : -0.6;
+      w.parts.push(p(-0.055, -0.03, z, 0.03, 0.03, 0.1, MAT.dark), p(-0.055, -0.03, z - 0.055, 0.012, 0.012, 0.01, MAT.glowR));
+    },
+  },
+];
+export const ATTACHMENT_BY_ID = {};
+for (const a of ATTACHMENTS) ATTACHMENT_BY_ID[a.id] = a;
+export const MAX_ATTACHMENTS = 2;
+
+const attCache = new Map();
+/** Abgeleitete Waffe mit Aufsaetzen (gecacht); ungueltige Ids werden ignoriert */
+export function applyAttachments(weapon, ids) {
+  const valid = (ids || []).filter(id => ATTACHMENT_BY_ID[id] && ATTACHMENT_BY_ID[id].fits(weapon)).slice(0, MAX_ATTACHMENTS).sort();
+  if (!valid.length) return weapon;
+  const key = weapon.id + '|' + valid.join(',');
+  let w = attCache.get(key);
+  if (w) return w;
+  w = Object.assign({}, weapon);
+  w.parts = weapon.parts.slice();
+  w.muzzle = weapon.muzzle.slice();
+  w.sound = Object.assign({}, weapon.sound);
+  w.grips = weapon.grips ? { r: weapon.grips.r && weapon.grips.r.slice(), l: weapon.grips.l && weapon.grips.l.slice() } : weapon.grips;
+  for (const id of valid) ATTACHMENT_BY_ID[id].apply(w);
+  w.variant = key;
+  w.base = weapon;
+  w.attachments = valid;
+  attCache.set(key, w);
+  return w;
+}
+
+/** Zufaellige, passende Aufsaetze fuer Bots */
+export function randomAttachments(weapon) {
+  const fit = ATTACHMENTS.filter(a => a.fits(weapon)).map(a => a.id);
+  const out = [];
+  if (Math.random() < 0.55 && fit.length) out.push(fit[(Math.random() * fit.length) | 0]);
+  if (Math.random() < 0.3 && fit.length > 1) { const o = fit[(Math.random() * fit.length) | 0]; if (!out.includes(o)) out.push(o); }
+  return out;
+}
+
+/** Waffenreihenfolge im Gun Game (letzte Stufe: Nahkampf) */
+export const GUNGAME_ORDER = [
+  'pistol', 'revolver', 'smg', 'akimbo', 'ar', 'burst', 'shotgun', 'lmg', 'marksman',
+  'sniper', 'crossbow', 'minigun', 'flame', 'rpg', 'bow', 'tknife', 'katana',
 ];
 
 export const CLASS_BY_ID = {};

@@ -23,9 +23,60 @@ class MapBuilder {
     this.rampSteps = [];
     this.bounds = { min: -60, max: 60 };
     this.size = 120;
-    // Farbe -> Oberflaechentyp (Schrittgeraeusche): sand | stone | wood | metal | grate | dirt
+    // Farbe -> Oberflaechentyp (Schrittgeraeusche): sand | stone | wood | metal | grate | dirt | water
     this.surfaces = {};
+    // Spielmodi: Flaggenbasen (CTF), Hardpoint-Zonen, Bombenplaetze (S&D)
+    this.flags = {};
+    this.hardpoints = [];
+    this.bombsites = [];
+    this.lamps = [];
+    this.ziplines = [];
   }
+
+  /** Bombenplatz fuer Search & Destroy */
+  bombsite(name, x, z) { this.bombsites.push({ name, x, z }); }
+
+  /**
+   * Seilbahn von (x1,y1,z1) nach (x2,y2,z2). Beide Enden bekommen einen
+   * Pfosten; das Seil selbst zeichnet das Spiel (diagonal, kein Box-Objekt).
+   * y ist die Seilhoehe; Spieler haengen 1.95 darunter.
+   */
+  zipline(x1, y1, z1, x2, y2, z2) {
+    this.ziplines.push({ a: { x: x1, y: y1, z: z1 }, b: { x: x2, y: y2, z: z2 } });
+    for (const [x, y, z] of [[x1, y1, z1], [x2, y2, z2]]) {
+      this.b(x, y - 3.2, z, 0.36, 3.2, 0.36, 0x3a3f46, { surface: 'metal' });
+      this.b(x, y - 0.1, z, 0.7, 0.2, 0.7, 0xffcc00, { emissive: 0.4, noShadow: true, noCollide: true });
+    }
+  }
+  ziplineS(x1, y1, z1, x2, y2, z2) { this.zipline(x1, y1, z1, x2, y2, z2); this.zipline(-x1, y1, -z1, -x2, y2, -z2); }
+
+  /** Flaggenbasis fuer CTF */
+  flag(x, z, team) { this.flags[team] = { x, z }; }
+  flagS(x, z) { this.flag(x, z, 'red'); this.flag(-x, -z, 'blue'); }
+  /** Hardpoint-Zone */
+  hardpoint(x, z) { this.hardpoints.push({ x, z }); }
+  /** Laterne (Nacht) */
+  lamp(x, z) { this.lamps.push({ x, z }); }
+  lampS(x, z) { this.lamp(x, z); this.lamp(-x, -z); }
+
+  /** Zerstoerbare Kiste (Holz) */
+  crate(cx, by, cz, size = 2.4, color = 0xa8703a) {
+    return this.b(cx, by, cz, size, size, size, color, { surface: 'wood', destr: { type: 'crate', hp: 70, respawn: 40 } });
+  }
+  crateS(cx, by, cz, size, color) { this.crate(cx, by, cz, size, color); this.crate(-cx, by, -cz, size, color); }
+  /** Explosives Fass */
+  barrel(cx, by, cz) {
+    return this.b(cx, by, cz, 1.3, 1.8, 1.3, 0xc0392b, { surface: 'metal', destr: { type: 'barrel', hp: 35, explode: true, respawn: 45 } });
+  }
+  barrelS(cx, by, cz) { this.barrel(cx, by, cz); this.barrel(-cx, by, -cz); }
+  /** Glasscheibe (axis 'x': Flaeche liegt in der X-Y-Ebene, 'z': in der Z-Y-Ebene) */
+  glass(cx, by, cz, w, h, axis = 'x') {
+    const t = 0.12;
+    return axis === 'x'
+      ? this.b(cx, by, cz, w, h, t, 0xa8d8f0, { destr: { type: 'glass', hp: 1, respawn: 30 }, noShadow: true })
+      : this.b(cx, by, cz, t, h, w, 0xa8d8f0, { destr: { type: 'glass', hp: 1, respawn: 30 }, noShadow: true });
+  }
+  glassS(cx, by, cz, w, h, axis) { this.glass(cx, by, cz, w, h, axis); this.glass(-cx, by, -cz, w, h, axis); }
 
   /** Box hinzufuegen. opts: {noCollide, emissive, noShadow, surface} */
   b(cx, by, cz, w, h, d, color, opts) {
@@ -284,6 +335,21 @@ function buildSandstorm() {
   m.pickup(0, 22, 'armor'); m.pickup(0, -22, 'armor');
   m.pickup(0, 0, 'health', 15.6);
 
+  // ---------------- Zerstoerbares, Modi, Laternen ----------------
+  m.crateS(16, 0, 26, 2.4);
+  m.crateS(-4, 0, 30, 2.2);
+  m.crateS(26, 0, 30, 2.4); m.crateS(26, 2.4, 30, 2.0);
+  m.barrelS(23, 0, 18); m.barrelS(24.5, 0, 18.2);
+  m.barrelS(-44, 0, 4);
+  m.glassS(-38, 3, 22.8, 5, 3, 'x');       // Fenster im Seitenhaus
+  m.glassS(38, 3, 22.8, 5, 3, 'x');
+  m.flagS(0, 42);
+  m.hardpoint(0, 0); m.hardpoint(20, 14); m.hardpoint(-20, -14); m.hardpoint(-38, 30); m.hardpoint(38, -30);
+  m.bombsite('A', 0, 0); m.bombsite('B', 40, 8);
+  m.lampS(14, 36); m.lampS(-14, 36); m.lampS(44, 0); m.lampS(0, 12); m.lampS(-26, -10);
+  // Seilbahn vom Seitenhausdach zum Bunkerdach
+  m.ziplineS(-38, 13.2, 30, -40, 11.2, 4);
+
   // ---------------- Spawns ----------------
   m.spawnS(0, 47);
   m.spawnS(-9, 48);
@@ -422,6 +488,19 @@ function buildBurg() {
   m.pickup(0, 0, 'armor', 12.9);
   m.pickup(9, 24, 'health'); m.pickup(-9, -24, 'health');
 
+  // Zerstoerbares, Modi, Laternen
+  m.crateS(8, 0, 18, 2.4); m.crateS(10.6, 0, 18, 2.0);
+  m.crateS(-30, 0, 8, 2.4);
+  m.barrelS(20, 0, 30); m.barrelS(21.5, 0, 30.4);
+  m.barrelS(-6, 0, -8);
+  m.glassS(-24, 2.5, 14.3, 4, 2.6, 'x');   // Fenster Nebengebaeude
+  m.flagS(0, 33);
+  m.hardpoint(0, 0); m.hardpoint(24, 16); m.hardpoint(-24, -16); m.hardpoint(0, 30); m.hardpoint(-34, 30);
+  m.bombsite('A', 0, 0); m.bombsite('B', -24, 20);
+  m.lampS(12, 30); m.lampS(-12, 30); m.lampS(30, 0); m.lampS(-18, -6);
+  // Seilbahn vom Ecktturm auf das Bergfrieddach
+  m.ziplineS(38, 20.4, 38, 8, 16.4, 8);
+
   m.spawnS(0, 37);
   m.spawnS(-10, 36);
   m.spawnS(10, 36);
@@ -528,6 +607,19 @@ function buildCitadel() {
   m.pickup(0, 0, 'armor', 21.6);
   m.pickup(0, 30, 'health'); m.pickup(0, -30, 'health');
 
+  // Zerstoerbares, Modi, Laternen
+  m.crateS(14, 0, 36, 2.4); m.crateS(14, 2.4, 36, 2.0);
+  m.crateS(-6, 0, 20, 2.2);
+  m.barrelS(28, 0, 20); m.barrelS(29.6, 0, 20.3); m.barrelS(28.8, 0, 21.7);
+  m.barrelS(-40, 0, 6);
+  m.flagS(0, 42);
+  m.hardpoint(0, 0); m.hardpoint(20, 14); m.hardpoint(-20, -14); m.hardpoint(36, 36); m.hardpoint(-36, -36);
+  m.bombsite('A', 0, 0); m.bombsite('B', 30, 10);
+  m.lampS(10, 40); m.lampS(-10, 40); m.lampS(30, 4); m.lampS(0, 18);
+  // Seilbahnen: vom Eckturm-Deck zum Reaktordach und vom Ring zum Boden
+  m.ziplineS(30, 19.5, 30, 6, 25.2, 6);
+  m.ziplineS(-30, 19, 0, -46, 4.6, -24);
+
   m.spawnS(0, 48);
   m.spawnS(-12, 48);
   m.spawnS(12, 48);
@@ -539,16 +631,358 @@ function buildCitadel() {
   return m;
 }
 
+// ============================================================
+// HAFEN — Containerhafen: Kraene, Containerstapel, Lagerhalle,
+// Pier ueber dem Wasser, Tanklager mit Faessern
+// ============================================================
+function buildHafen() {
+  const m = new MapBuilder({
+    id: 'hafen',
+    name: 'HAFEN',
+    skyTop: 0x2e6fb0, skyBottom: 0xd8e4ec,
+    fogColor: 0xb9c8d4, fogNear: 70, fogFar: 230,
+    sunDir: [-0.35, 0.7, 0.55], sunColor: 0xfff0dc, sunIntensity: 1.35,
+    ambTop: 0x9fc0e6, ambBottom: 0x5a5e60, ambIntensity: 0.68,
+  });
+  const C = {
+    concrete: 0x8c8f92, concrete2: 0x7a7d80, asphalt: 0x4a4d52, water: 0x2a5f7a, waterFloor: 0x1d3a48,
+    pier: 0x8a6a44, plank: 0x6e5236, crane: 0xd9a020, craneDark: 0x8a6414, steel: 0x6a7280,
+    dark: 0x2e3238, hall: 0xb8b4aa, hallRoof: 0x6a6e74, cRed: 0xa8402a, cBlue: 0x2a5a9a,
+    cGreen: 0x3a7a4a, cYellow: 0xc9a020, cWhite: 0xd8d8d2, rust: 0x7a4a2a, stripe: 0xffcc00, glow: 0x2ee6ff,
+  };
+  m.surfaces = {
+    [C.concrete]: 'stone', [C.concrete2]: 'stone', [C.asphalt]: 'stone', [C.waterFloor]: 'water',
+    [C.pier]: 'wood', [C.plank]: 'wood', [C.crane]: 'metal', [C.craneDark]: 'metal', [C.steel]: 'metal',
+    [C.dark]: 'metal', [C.hallRoof]: 'metal', [C.cRed]: 'metal', [C.cBlue]: 'metal', [C.cGreen]: 'metal',
+    [C.cYellow]: 'metal', [C.cWhite]: 'metal', [C.rust]: 'metal',
+  };
+
+  m.arena(116, C.concrete, C.concrete2, 30);
+
+  // ---------------- Hafenbecken (Osten und Westen, punktsymmetrisch) ----------------
+  // Wasser liegt 2.4 tiefer; Kaimauer als Kante, Pier aus Planken darueber
+  for (const s of [1, -1]) {
+    m.b(s * 46, -3, s * 10, 22, 0.6, 60, C.waterFloor);                 // Beckenboden (Oberkante -2.4)
+    m.b(s * 46, -2.4, s * 10, 22, 0.4, 60, C.water, { emissive: 0.12, noShadow: true, noCollide: true });
+    m.b(s * 35.2, -3, s * 10, 0.8, 3, 60, C.concrete2);                  // Kaimauer
+    // Pier ueber dem Wasser
+    m.b(s * 44, -0.3, s * 4, 16, 0.5, 6, C.pier);
+    m.b(s * 44, -0.3, s * 20, 6, 0.5, 26, C.pier);
+    for (let i = -2; i <= 2; i++) m.b(s * (38 + i * 3.2), -3, s * 4, 0.5, 2.7, 0.5, C.plank);
+    m.b(s * 51, 0.2, s * 4, 0.3, 1.0, 6, C.plank, { noShadow: true });   // Gelaender
+    m.b(s * 44, 0.2, s * 1, 16, 1.0, 0.3, C.plank, { noShadow: true });
+    // Poller
+    m.b(s * 34, 0, s * 2, 0.8, 0.8, 0.8, C.dark);
+    m.b(s * 34, 0, s * 18, 0.8, 0.8, 0.8, C.dark);
+  }
+
+  // ---------------- Grosse Portalkraene (Nord und Sued) ----------------
+  m.b4(14, 0, 36, 2.2, 20, 2.2, C.crane);                                // Beine (alle vier Quadranten)
+  for (const s of [1, -1]) {
+    const cz = s * 36;
+    m.b(0, 20, cz, 32, 2.2, 3, C.crane);                                 // Traeger
+    m.b(0, 22.2, cz, 32, 0.4, 3.4, C.craneDark);
+    m.b(0, 18.8, cz, 30, 1.2, 0.5, C.stripe, { emissive: 0.3, noShadow: true, noCollide: true });
+    m.b(s * 10, 22.6, cz, 4, 3, 3.6, C.craneDark);                       // Kabine
+    m.b(s * 10, 23.4, cz - s * 1.9, 3.2, 1.4, 0.15, C.glow, { emissive: 0.6, noShadow: true, noCollide: true });
+    m.b(0, 12, cz, 0.5, 8, 0.5, C.steel);                                // Seil
+    m.b(0, 10, cz, 6, 2.6, 2.6, C.cYellow);                              // haengender Container
+    // Querstreben
+    m.b(0, 6, cz, 30, 0.5, 0.5, C.craneDark);
+    m.b(0, 12, cz, 30, 0.5, 0.5, C.craneDark);
+  }
+  // Aufgaenge: Containerstapel -> Sprungpad auf den Kran
+  m.padS(-19, 30, 42, C.glow);
+
+  // ---------------- Lagerhalle in der Mitte ----------------
+  m.building(0, 0, 0, 30, 10, 20, C.hall, C.hallRoof,
+    { doors: { n: true, s: true, e: true, w: true }, doorW: 7, doorH: 6, thickness: 1.2 });
+  m.b(0, 10.8, 0, 32, 0.6, 22, C.hallRoof);
+  m.b(0, 11.4, 0, 8, 2.2, 6, C.dark);                                    // Dachaufbau
+  m.b(0, 5.5, 0, 6, 0.3, 6, C.steel);                                    // Zwischenboden
+  m.rampTo(-10, 0, 4, 12, 0, 5.8, C.steel, 'z', true, 0);
+  m.rampTo(10, 0, 4, 12, 0, 5.8, C.steel, 'z', false, 0);
+  m.b(0, 5.5, 0, 24, 0.3, 4, C.steel);                                   // Laufsteg quer
+  // Fenster in den Laengswaenden
+  m.glassS(-9, 5.5, 9.4, 6, 3, 'x'); m.glassS(9, 5.5, 9.4, 6, 3, 'x');
+  m.glassS(-9, 5.5, -9.4, 6, 3, 'x'); m.glassS(9, 5.5, -9.4, 6, 3, 'x');
+  // Aufgang aufs Hallendach
+  m.rampToS(-19, 0, 5, 20, 0, 11.4, C.steel, 'z', false);
+  m.bs(-19, 11.4, -3, 5, 1.0, 0.4, C.steel, { noShadow: true });
+
+  // ---------------- Containerstapel ----------------
+  const cont = (x, y, z, col, rot) => rot ? m.b(x, y, z, 2.6, 2.6, 6.2, col) : m.b(x, y, z, 6.2, 2.6, 2.6, col);
+  const contS = (x, y, z, col, rot) => { cont(x, y, z, col, rot); cont(-x, y, -z, col, rot); };
+  contS(-22, 0, 30, C.cRed); contS(-22, 2.6, 30, C.cBlue); contS(-22, 5.2, 30, C.cGreen);
+  contS(-15, 0, 30, C.cWhite); contS(-15, 2.6, 30, C.rust);
+  contS(-22, 0, 33.2, C.cYellow); contS(-22, 2.6, 33.2, C.cRed);
+  contS(-8, 0, 30, C.cBlue, true); contS(-8, 2.6, 30, C.cGreen, true);
+  contS(22, 0, 18, C.cGreen, true); contS(22, 2.6, 18, C.cWhite, true);
+  contS(24.8, 0, 18, C.cRed, true);
+  contS(14, 0, 16, C.cYellow); contS(14, 2.6, 16, C.cBlue);
+  contS(-28, 0, 12, C.rust); contS(-28, 2.6, 12, C.cYellow);
+  contS(-30, 0, -4, C.cWhite, true);
+  contS(30, 0, 40, C.cBlue); contS(30, 2.6, 40, C.cRed);
+  contS(6, 0, 44, C.cGreen); contS(12.5, 0, 44, C.rust);
+  // Treppen auf Stapel
+  m.rampToS(-15, 36.5, 4, 9, 0, 5.2, C.steel, 'z', true);
+  m.rampToS(14, 21.4, 4, 8, 0, 5.2, C.steel, 'z', true);
+
+  // ---------------- Tanklager mit Faessern (explosiv) ----------------
+  m.bs(-30, 0, -26, 8, 5, 8, C.cWhite);
+  m.bs(-30, 5, -26, 8.6, 0.6, 8.6, C.steel);
+  m.bs(-30, 0, -26, 8.4, 1.2, 8.4, C.stripe, { noShadow: true, noCollide: true });
+  m.barrelS(-25, 0, -30); m.barrelS(-23.6, 0, -30.4); m.barrelS(-24.3, 0, -28.9);
+  m.barrelS(-36, 0, -20); m.barrelS(-34.6, 0, -19.6);
+  m.barrelS(4, 0, 14); m.barrelS(5.5, 0, 14.4);
+  // Kisten
+  m.crateS(-6, 0, 22, 2.4); m.crateS(-3.5, 0, 22, 2.2); m.crateS(-6, 2.4, 22, 2.0);
+  m.crateS(26, 0, 6, 2.4); m.crateS(28.5, 0, 6, 2.4);
+  m.crateS(0, 0, 14, 2.2);
+  m.crateS(20, 0, -8, 2.4); m.crateS(20, 2.4, -8, 2.0);
+
+  // ---------------- Deckung / Deko ----------------
+  m.b4(38, 0, 26, 3, 3.5, 3, C.dark);                                    // Stromkaesten
+  m.bs(0, 0, 24, 12, 1.2, 1.2, C.concrete2);                             // Betonbarriere
+  m.bs(-12, 0, 8, 1.2, 1.2, 10, C.concrete2);
+  m.bx(50, 0, 40, 4, 12, 4, C.hall);                                     // Leuchtturm-artige Tuerme
+  m.bx(50, 12, 40, 4.6, 0.5, 4.6, C.hallRoof);
+  m.bx(50, 12.5, 40, 2, 2, 2, C.glow, { emissive: 0.9, noShadow: true });
+  m.bx(50, 0, -40, 4, 12, 4, C.hall);
+  m.bx(50, 12, -40, 4.6, 0.5, 4.6, C.hallRoof);
+  // Fahrbahnmarkierungen
+  m.b(0, 0.01, 0, 0.3, 0.04, 100, C.stripe, { emissive: 0.3, noShadow: true, noCollide: true });
+  m.b(0, 0.01, 0, 100, 0.04, 0.3, C.stripe, { emissive: 0.3, noShadow: true, noCollide: true });
+
+  // ---------------- Pickups, Pads, Modi ----------------
+  m.pickupS(-15, 30, 'ammo', 8.4);
+  m.pickupS(26, 2, 'health');
+  m.pickup(0, 0, 'armor', 6.8);
+  m.pickup(0, 0, 'health', 12.6);
+  m.pickup(44, 4, 'ammo', 1.0); m.pickup(-44, -4, 'ammo', 1.0);
+  m.padS(36, -8, 24);
+  m.flagS(0, 46);
+  m.hardpoint(0, 0); m.hardpoint(-22, 26); m.hardpoint(22, -26); m.hardpoint(40, 8); m.hardpoint(-40, -8);
+  m.bombsite('A', -22, 30); m.bombsite('B', 22, -18);
+  m.lampS(8, 44); m.lampS(-26, 20); m.lampS(30, 12); m.lampS(0, 26); m.lampS(38, 30);
+  // Seilbahnen: vom Krantraeger aufs Hallendach und vom Containerstapel zum Pier
+  m.ziplineS(-6, 25.4, 34, -3, 15.4, 4);
+  m.ziplineS(-22, 10.6, 27, -40, 4.2, 6);
+
+  // ---------------- Spawns ----------------
+  m.spawnS(0, 50);
+  m.spawnS(-8, 52);
+  m.spawnS(8, 52);
+  m.spawnS(-30, 48);
+  m.spawnS(26, 48);
+  m.spawnS(-44, 30);
+  m.spawnS(40, 46);
+  m.spawn(-50, 0, null); m.spawn(50, 0, null);
+  m.spawn(-20, -12, null); m.spawn(20, 12, null);
+  return m;
+}
+
+// ============================================================
+// DSCHUNGEL — Fluss mit Wasserfall, Haengebruecken, Tempelruinen,
+// Baeume als Deckung, Klippenplateau im Westen
+// ============================================================
+function buildDschungel() {
+  const m = new MapBuilder({
+    id: 'dschungel',
+    name: 'DSCHUNGEL',
+    skyTop: 0x2c6aa8, skyBottom: 0xcfe3c9,
+    fogColor: 0x9fc09a, fogNear: 60, fogFar: 210,
+    sunDir: [0.3, 0.78, 0.55], sunColor: 0xfff6dc, sunIntensity: 1.3,
+    ambTop: 0x8fc0a0, ambBottom: 0x3a5a30, ambIntensity: 0.75,
+  });
+  const C = {
+    ground: 0x4d6b35, mud: 0x5a4a32, stone: 0x7c8172, stone2: 0x656a5c, moss: 0x3f6b3a,
+    trunk: 0x5a3d24, leaves: 0x2f7a35, leaves2: 0x3d9440, plank: 0x8a6a44, rope: 0x9a8262,
+    temple: 0x8f8a74, temple2: 0x7a7560, gold: 0xd8ad2a, glow: 0x2ee6a8, water: 0x3a8fb0, waterFloor: 0x1d4a5a,
+    fall: 0xbfe6ff, cliff: 0x6b6f66,
+  };
+  m.surfaces = {
+    [C.ground]: 'dirt', [C.mud]: 'dirt', [C.moss]: 'dirt', [C.waterFloor]: 'water',
+    [C.trunk]: 'wood', [C.leaves]: 'wood', [C.leaves2]: 'wood', [C.plank]: 'wood', [C.rope]: 'wood',
+    [C.stone]: 'stone', [C.stone2]: 'stone', [C.temple]: 'stone', [C.temple2]: 'stone', [C.cliff]: 'stone',
+  };
+
+  // ---------------- Boden mit Flusslauf (z = -5..5), Aussenwaende ----------------
+  const S = 116, s = S / 2;
+  m.b(0, -3, 33, S + 30, 3, 56, C.ground);
+  m.b(0, -3, -33, S + 30, 3, 56, C.ground);
+  m.b(0, -3.2, 0, S + 30, 1.6, 10, C.waterFloor);                                    // Flussbett, Oberkante -1.6
+  m.b(0, -1.5, 0, S + 30, 0.5, 10, C.water, { alpha: 0.55, noCollide: true, noShadow: true, emissive: 0.15 });
+  m.b(0, 0, s + 2, S + 12, 30, 4, C.cliff);
+  m.b(0, 0, -s - 2, S + 12, 30, 4, C.cliff);
+  m.b(s + 2, 0, 0, 4, 30, S + 12, C.cliff);
+  m.b(-s - 2, 0, 0, 4, 30, S + 12, C.cliff);
+  m.bounds = { min: -s, max: s };
+  m.size = S;
+  // Ufer (leicht erhoehte Kanten)
+  m.b(0, -0.4, 5.8, S + 30, 0.5, 1.6, C.mud);
+  m.b(0, -0.4, -5.8, S + 30, 0.5, 1.6, C.mud);
+
+  // ---------------- Wasserfall-Plateau im Osten ----------------
+  m.b(50, 0, 0, 16, 12, 30, C.cliff);                                                // Plateau, Oberkante 12
+  m.b(50, 12, 0, 12, 0.3, 10, C.water, { alpha: 0.5, noCollide: true, noShadow: true, emissive: 0.1 });   // Pool
+  m.b(41.6, -1.6, 0, 1.4, 13.8, 8, C.fall, { alpha: 0.45, noCollide: true, noShadow: true, emissive: 0.35 });  // Wasserfall
+  m.b(41.0, -1.4, 0, 3, 0.8, 9, C.fall, { alpha: 0.35, noCollide: true, noShadow: true, emissive: 0.25 });     // Gischt
+  m.rampTo(50, 22, 6, 18, 0, 12, C.stone2, 'z', true);                              // Aufgang von Norden
+  m.rampTo(50, -22, 6, 18, 0, 12, C.stone2, 'z', false);                            // und von Sueden
+  m.b4(46, 12, 14, 1.4, 2.4, 1.4, C.stone);                                          // Eckpfeiler
+  m.b(56, 12, 0, 1.2, 1.6, 30, C.stone2, { noShadow: true });
+
+  // ---------------- Klippenplateau im Westen (Oberkante 8) ----------------
+  m.b(-50, 0, 0, 16, 8, 44, C.cliff);
+  m.rampTo(-50, 30, 6, 16, 0, 8, C.stone2, 'z', true);
+  m.rampTo(-50, -30, 6, 16, 0, 8, C.stone2, 'z', false);
+  m.bs(-46, 8, 12, 4, 3, 4, C.stone);
+  m.b(-43, 8, 0, 1.2, 1.4, 44, C.stone2, { noShadow: true });
+
+  // ---------------- Bruecken ueber den Fluss ----------------
+  m.b(0, -0.4, 0, 9, 0.8, 13, C.temple);                                             // Steinbruecke Mitte
+  m.b(0, 0.4, 0, 9, 0.6, 13, C.temple2, { noCollide: true, noShadow: true });
+  m.bx(5.2, 0.4, 0, 0.6, 1.1, 13, C.temple, { noShadow: true });
+  for (const x of [-30, 30]) {                                                       // Haengebruecken
+    m.b(x, -0.3, 0, 3.2, 0.4, 13, C.plank);
+    m.b(x, -0.1, 0, 3.4, 0.1, 13, C.plank, { noCollide: true, noShadow: true });
+    m.b(x - 1.7, 0.1, 0, 0.16, 1.2, 13, C.rope, { noCollide: true, noShadow: true });
+    m.b(x + 1.7, 0.1, 0, 0.16, 1.2, 13, C.rope, { noCollide: true, noShadow: true });
+    m.b4(Math.abs(x) + 1.7, 0, 6.8, 0.5, 2.6, 0.5, C.trunk);
+  }
+
+  // ---------------- Tempelruinen (Nord und Sued, punktsymmetrisch) ----------------
+  m.bs(0, 0, 28, 22, 3, 22, C.temple);
+  m.bs(0, 3, 28, 15, 3, 15, C.temple2);
+  m.bs(0, 6, 28, 8, 3, 8, C.temple);
+  m.bs(0, 9, 28, 4, 2.5, 4, C.gold, { emissive: 0.2 });
+  m.rampToS(0, 15.5, 6, 6, 0, 3, C.temple, 'z', true);
+  m.rampToS(0, 22, 4, 5, 3, 6, C.temple2, 'z', true, 3);
+  m.rampToS(-12, 28, 4, 8, 0, 3, C.temple, 'x', false);
+  // Saeulen und Mauerreste
+  m.b4(14, 0, 22, 1.8, 7, 1.8, C.stone);
+  m.b4(14, 0, 34, 1.8, 5, 1.8, C.stone);
+  m.bs(-18, 0, 40, 12, 4.5, 1.6, C.stone2);
+  m.bs(18, 0, 44, 1.6, 4, 10, C.stone2);
+  m.bs(-24, 0, 16, 6, 2.6, 1.6, C.moss);
+  m.bs(20, 0, 12, 1.6, 3, 8, C.moss);
+  // Zerstoerbares
+  m.crateS(8, 0, 44, 2.4); m.crateS(10.5, 0, 44, 2.2);
+  m.crateS(-6, 0, 12, 2.2);
+  m.barrelS(-14, 0, 46); m.barrelS(-12.6, 0, 46.4);
+  m.barrelS(22, 0, 24);
+
+  // ---------------- Baeume ----------------
+  const tree = (x, z, h, big) => {
+    m.b(x, 0, z, big ? 1.8 : 1.3, h, big ? 1.8 : 1.3, C.trunk);
+    m.b(x, h, z, big ? 9 : 6.5, 3, big ? 9 : 6.5, C.leaves);
+    m.b(x, h + 3, z, big ? 6 : 4.2, 2.6, big ? 6 : 4.2, C.leaves2);
+    m.b(x, h + 5.6, z, big ? 3 : 2.2, 1.6, big ? 3 : 2.2, C.leaves);
+  };
+  const treeS = (x, z, h, big) => { tree(x, z, h, big); tree(-x, -z, h, big); };
+  treeS(-30, 22, 7, true); treeS(-16, 34, 6, false); treeS(26, 36, 8, true); treeS(34, 14, 6, false);
+  treeS(-8, 48, 6, false); treeS(12, 10, 5, false); treeS(-38, 44, 7, false); treeS(40, 44, 6, false);
+  treeS(30, -12, 6, false);
+
+  // ---------------- Pickups, Pads, Modi ----------------
+  m.pickupS(-30, 22, 'health');
+  m.pickupS(26, 16, 'ammo');
+  m.pickup(0, 28, 'armor', 12.6); m.pickup(0, -28, 'armor', 12.6);
+  m.pickup(50, 0, 'health', 13.4);
+  m.pickup(-50, 0, 'ammo', 9.2);
+  m.padS(-40, 26, 26, C.glow);
+  m.padS(36, -8, 24, C.glow);
+  m.flagS(0, 46);
+  m.hardpoint(0, 0); m.hardpoint(0, 28); m.hardpoint(0, -28); m.hardpoint(50, 0); m.hardpoint(-50, 0);
+  m.bombsite('A', 0, 28); m.bombsite('B', -50, 0);
+  m.lampS(8, 40); m.lampS(-30, 8); m.lampS(30, -8); m.lampS(0, 14);
+  m.ziplineS(-44, 12.4, 16, -8, 15.2, 30);     // Klippe -> Tempeldach
+  m.zipline(50, 16.4, 0, 8, 4.2, 0);           // Wasserfall-Plateau -> Steinbruecke
+
+  // ---------------- Spawns ----------------
+  m.spawnS(0, 52);
+  m.spawnS(-10, 50);
+  m.spawnS(10, 50);
+  m.spawnS(-26, 46);
+  m.spawnS(28, 48);
+  m.spawnS(-44, 40);
+  m.spawnS(44, 38);
+  m.spawn(-50, 0, null); m.spawn(50, 0, null);
+  m.spawn(-30, -14, null); m.spawn(30, 14, null);
+  return m;
+}
+
+// ============================================================
+// SCHIESSSTAND — Trainingskarte: Schuetzenstand, freie Bahn,
+// Distanzmarken, Kugelfang. Keine Deckung, nur Sicht.
+// ============================================================
+function buildRange() {
+  const m = new MapBuilder({
+    id: 'range',
+    name: 'SCHIESSSTAND',
+    skyTop: 0x2f5f9f, skyBottom: 0xd8e6f0,
+    fogColor: 0xbfd0dc, fogNear: 90, fogFar: 260,
+    sunDir: [0.35, 0.8, 0.48], sunColor: 0xfff4e0, sunIntensity: 1.35,
+    ambTop: 0xa8c4e8, ambBottom: 0x6c6a60, ambIntensity: 0.72,
+  });
+  const C = {
+    ground: 0x8c8f8a, wall: 0x596068, dark: 0x3a3f46, floor: 0xa4a7a0, lane: 0x4a5058,
+    accent: 0xffb020, red: 0xc0392b, white: 0xe8ecef, glow: 0x2ee6ff,
+  };
+  m.surfaces = { [C.floor]: 'stone', [C.lane]: 'metal', [C.dark]: 'metal', [C.ground]: 'stone' };
+
+  m.arena(100, C.ground, C.wall, 22);
+
+  // Schuetzenstand (Plattform z 7..19, Oberkante 0.6) mit Bruestung; das Dach
+  // deckt nur den hinteren Teil, damit die Spawns (z = 11) unter freiem Himmel liegen
+  m.b(0, 0, 13, 44, 0.6, 12, C.floor);
+  m.b(0, 0.6, 7.4, 44, 0.9, 0.5, C.lane);
+  m.bx(21.5, 0.6, 15, 0.6, 7, 0.6, C.dark);
+  m.bx(21.5, 0.6, 18.5, 0.6, 7, 0.6, C.dark);
+  m.b(0, 7.6, 17, 46, 0.5, 5, C.dark);
+  m.b(0, 7.2, 14.6, 46, 0.4, 0.5, C.accent, { emissive: 0.5, noShadow: true, noCollide: true });
+  // Lauflinien auf dem Stand
+  for (let x = -14; x <= 14; x += 7) m.b(x, 0.6, 13, 0.15, 0.02, 12, C.white, { noShadow: true, noCollide: true });
+
+  // Bahn: Seitenwaende und Kugelfang
+  m.bx(22, 0, -19, 1.2, 8, 52, C.wall);
+  m.b(0, 0, -45, 46, 16, 2, C.dark);
+  m.b(0, 0.02, -43.8, 40, 11, 0.4, C.lane, { noCollide: true, noShadow: true });
+  m.b(0, 11.2, -43.8, 40, 0.5, 0.5, C.red, { emissive: 0.4, noShadow: true, noCollide: true });
+
+  // Distanzmarken (10, 20, 30, 40 m vor dem Stand)
+  for (let d = 10; d <= 40; d += 10) {
+    m.b(0, 0.01, 12 - d, 42, 0.06, 0.35, d % 20 === 0 ? C.accent : C.white, { emissive: 0.5, noShadow: true, noCollide: true });
+  }
+  // Bahnbegrenzung am Boden
+  m.bx(20.5, 0.01, -19, 0.3, 0.05, 52, C.glow, { emissive: 0.6, noShadow: true, noCollide: true });
+
+  // Dekorative Pfosten hinter der Bahn (Silhouette), ausserhalb der Sichtlinie zu den Zielen
+  m.bx(30, 0, -30, 2, 12, 2, C.wall);
+  m.bx(36, 0, -10, 2, 9, 2, C.wall);
+
+  m.spawn(0, 11, null);
+  m.spawn(-6, 11, null);
+  m.spawn(6, 11, null);
+  return m;
+}
+
 const BUILDERS = {
   sandstorm: buildSandstorm,
   burg: buildBurg,
   citadel: buildCitadel,
+  hafen: buildHafen,
+  dschungel: buildDschungel,
+  range: buildRange,
 };
 
 export const MAP_LIST = [
   { id: 'sandstorm', name: 'Sandstorm' },
   { id: 'burg', name: 'Burg' },
   { id: 'citadel', name: 'Citadel' },
+  { id: 'hafen', name: 'Hafen' },
+  { id: 'dschungel', name: 'Dschungel' },
 ];
 
 /**

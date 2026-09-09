@@ -223,6 +223,9 @@ export class AudioEngine {
   shot(pos, opt = {}) {
     if (!this.ready) return;
     if (opt.kind === 'energy') { this._energyShot(pos, opt); return; }
+    if (opt.kind === 'bow') { this._bowShot(pos, opt); return; }
+    if (opt.kind === 'flame') { this._flameTick(pos, opt); return; }
+    if (opt.kind === 'throw') { this._throw(pos, opt); return; }
     const P = PRESETS[opt.kind] || PRESETS.rifle;
     const vol = opt.vol !== undefined ? opt.vol : 1;
     const pitch = opt.pitch || 1;
@@ -274,6 +277,249 @@ export class AudioEngine {
     if (P.whoosh) this._burst(out.node, t + 0.05, 0.9, 'bandpass', 900, 260, 1.2, v * 0.45, 0.05);
   }
 
+  /** Bogen: Sehne schnalzt, Pfeil zischt ab */
+  _bowShot(pos, opt) {
+    const out = this._out(this.busSfx, pos, 10, 70, 0.2);
+    if (!out) return;
+    const t = this.ctx.currentTime;
+    const v = (opt.vol || 0.8) * out.gain * (opt.power !== undefined ? 0.6 + opt.power * 0.5 : 1);
+    this._burst(out.node, t, 0.03, 'bandpass', 900, 500, 1.5, 0.7 * v, 0.001);
+    this._osc(out.node, t, 0.16, 'triangle', 240, 160, 0.35 * v, 0.002);
+    this._osc(out.node, t, 0.09, 'sine', 620, 380, 0.2 * v, 0.002);
+    this._burst(out.node, t + 0.01, 0.22, 'bandpass', 2400, 900, 2.0, 0.25 * v, 0.01);   // Pfeil zischt
+  }
+
+  /** Bogen spannen: Sehne knarzt */
+  bowDraw(pos) {
+    if (!this.ready) return;
+    const out = this._out(this.busSfx, pos, 8, 40, 0.1);
+    if (!out) return;
+    const t = this.ctx.currentTime;
+    this._burst(out.node, t, 0.45, 'bandpass', 500, 900, 3.0, 0.16 * out.gain, 0.08);
+    this._osc(out.node, t, 0.5, 'sawtooth', 90, 130, 0.04 * out.gain, 0.1);
+  }
+
+  /** Flammenwerfer: kurzer Rausch-Stoss pro Tick -> wirkt durchgehend */
+  _flameTick(pos, opt) {
+    const out = this._out(this.busSfx, pos, 10, 60, 0.15);
+    if (!out) return;
+    const t = this.ctx.currentTime;
+    const v = (opt.vol || 0.5) * out.gain;
+    this._burst(out.node, t, 0.16, 'lowpass', 900 * rand(0.8, 1.2), 500, 0.8, 0.5 * v, 0.02);
+    this._burst(out.node, t, 0.12, 'bandpass', 2200 * rand(0.8, 1.2), 1500, 1.0, 0.16 * v, 0.02);
+    this._bodyOsc(out.node, t, 0.1, 110 * rand(0.9, 1.1), 70, 0.14 * v);
+  }
+
+  /** Wurfmesser: kurzer Wurf-Whoosh */
+  _throw(pos, opt) {
+    const out = this._out(this.busSfx, pos, 8, 40, 0.1);
+    if (!out) return;
+    const t = this.ctx.currentTime;
+    const v = (opt.vol || 0.6) * out.gain;
+    this._burst(out.node, t, 0.14, 'bandpass', 900, 3200, 2.5, 0.4 * v, 0.02);
+    this._osc(out.node, t + 0.02, 0.1, 'sine', 3800, 4200, 0.06 * v, 0.004);
+  }
+
+  /** Minigun: Laeufe laufen an (k = 0..1), pro Aufruf ein kurzer Ton */
+  spin(pos, k, up) {
+    if (!this.ready) return;
+    const out = this._out(this.busSfx, pos, 10, 50, 0.1);
+    if (!out) return;
+    const t = this.ctx.currentTime;
+    const f = 180 + k * 520;
+    this._osc(out.node, t, 0.11, 'sawtooth', f, f * (up ? 1.08 : 0.94), 0.06 * out.gain, 0.01);
+    this._burst(out.node, t, 0.1, 'bandpass', 1200 + k * 1800, 1200 + k * 1800, 3.0, 0.06 * out.gain, 0.01);
+  }
+
+  /** Brennen: leises Knistern */
+  burn(pos) {
+    if (!this.ready) return;
+    const out = this._out(this.busSfx, pos, 6, 30, 0.05);
+    if (!out) return;
+    const t = this.ctx.currentTime;
+    for (let i = 0; i < 3; i++) this._burst(out.node, t + Math.random() * 0.2, 0.02, 'highpass', 3000, 3000, 0.6, 0.12 * out.gain, 0.002);
+    this._burst(out.node, t, 0.25, 'lowpass', 800, 500, 0.8, 0.12 * out.gain, 0.05);
+  }
+
+  /** Holz splittert / Fass birst */
+  breakWood(pos) {
+    if (!this.ready) return;
+    const out = this._out(this.busSfx, pos, 10, 60, 0.2);
+    if (!out) return;
+    const t = this.ctx.currentTime;
+    const v = out.gain;
+    this._burst(out.node, t, 0.12, 'lowpass', 1500, 400, 0.9, 0.7 * v, 0.002);
+    this._bodyOsc(out.node, t, 0.1, 260, 90, 0.4 * v);
+    for (let i = 0; i < 5; i++) this._burst(out.node, t + 0.03 + i * 0.04, 0.03, 'bandpass', 1800 - i * 200, 900, 2.0, 0.25 * v, 0.002);
+  }
+
+  /** Glas zerspringt */
+  breakGlass(pos) {
+    if (!this.ready) return;
+    const out = this._out(this.busSfx, pos, 10, 60, 0.25);
+    if (!out) return;
+    const t = this.ctx.currentTime;
+    const v = out.gain;
+    this._burst(out.node, t, 0.05, 'highpass', 4000, 4000, 0.6, 0.7 * v, 0.001);
+    for (let i = 0; i < 9; i++) {
+      const f = 3000 + Math.random() * 5000;
+      this._osc(out.node, t + Math.random() * 0.25, 0.08, 'sine', f, f * 0.97, 0.08 * v, 0.001);
+    }
+    this._burst(out.node, t + 0.05, 0.35, 'bandpass', 5000, 3000, 1.5, 0.2 * v, 0.02);
+  }
+
+  /** Luftschlag: Jet-Vorbeiflug, danach kommen die Explosionen ueber explosion() */
+  jet(pos) {
+    if (!this.ready) return;
+    const out = this._out(this.busSfx, pos, 30, 260, 0.3);
+    if (!out) return;
+    const t = this.ctx.currentTime;
+    this._burst(out.node, t, 1.4, 'bandpass', 300, 2600, 0.8, 0.5 * out.gain, 0.5);
+    this._osc(out.node, t, 1.3, 'sawtooth', 140, 420, 0.08 * out.gain, 0.4);
+  }
+
+  /** Enterhaken: Abschuss (Druckluft + Klick), Einrasten, Seil laeuft */
+  grapple(pos, kind) {
+    if (!this.ready) return;
+    const out = this._out(this.busSfx, pos, 10, 55, 0.15);
+    if (!out) return;
+    const t = this.ctx.currentTime;
+    const v = out.gain;
+    if (kind === 'shoot') {
+      this._burst(out.node, t, 0.06, 'highpass', 2500, 2500, 0.6, 0.5 * v, 0.001);
+      this._bodyOsc(out.node, t, 0.08, 400, 120, 0.3 * v);
+      this._burst(out.node, t + 0.03, 0.25, 'bandpass', 1800, 900, 1.5, 0.15 * v, 0.02);   // Seil zischt
+    } else if (kind === 'hit') {
+      this._osc(out.node, t, 0.06, 'square', 2200, 900, 0.14 * v, 0.002);
+      this._burst(out.node, t, 0.04, 'bandpass', 3000, 1500, 2.0, 0.35 * v, 0.001);
+      this._burst(out.node, t + 0.05, 0.4, 'bandpass', 600, 1400, 1.2, 0.12 * v, 0.05);   // Winde
+    } else if (kind === 'miss') {
+      this._burst(out.node, t, 0.05, 'highpass', 2500, 2500, 0.6, 0.3 * v, 0.001);
+      this._osc(out.node, t + 0.08, 0.05, 'square', 700, 400, 0.08 * v, 0.002);
+    } else {
+      this._burst(out.node, t, 0.08, 'bandpass', 1400, 700, 1.5, 0.2 * v, 0.005);
+    }
+  }
+
+  /** Seilbahn: Rolle surrt (wird waehrend der Fahrt periodisch aufgerufen) */
+  zip(pos, kind) {
+    if (!this.ready) return;
+    const out = this._out(this.busSfx, pos, 10, 50, 0.15);
+    if (!out) return;
+    const t = this.ctx.currentTime;
+    const v = out.gain;
+    if (kind === 'start') { this._burst(out.node, t, 0.06, 'bandpass', 2000, 1200, 2.0, 0.3 * v, 0.002); this._osc(out.node, t, 0.05, 'square', 1500, 700, 0.1 * v, 0.002); }
+    else if (kind === 'end') { this._burst(out.node, t, 0.05, 'lowpass', 1200, 500, 1.0, 0.3 * v, 0.002); }
+    else { this._burst(out.node, t, 0.16, 'bandpass', 2600 * rand(0.95, 1.05), 2400, 4.0, 0.09 * v, 0.02); this._osc(out.node, t, 0.16, 'sawtooth', 240, 250, 0.03 * v, 0.02); }
+  }
+
+  /** Kopfbedeckung gewechselt (Menue): Stoffrascheln + Plopp */
+  hatSwap() {
+    if (!this.ready) return;
+    const t = this.ctx.currentTime;
+    this._burst(this.busUi, t, 0.12, 'bandpass', 1800, 900, 1.2, 0.18, 0.01);
+    this._bodyOsc(this.busUi, t + 0.08, 0.07, 500, 220, 0.2);
+  }
+
+  /** Bombe (S&D): Legen-Piepen, Ticken, Entschaerft */
+  bomb(kind, pos) {
+    if (!this.ready) return;
+    const t = this.ctx.currentTime;
+    if (kind === 'plant' || kind === 'defuse') {
+      const out = this._out(this.busSfx, pos, 10, 60, 0.1);
+      if (!out) return;
+      this._osc(out.node, t, 0.05, 'square', kind === 'plant' ? 1800 : 1400, kind === 'plant' ? 1800 : 1400, 0.1 * out.gain, 0.002);
+    } else if (kind === 'planted') {
+      [900, 1200, 900, 1200].forEach((f, i) => this._osc(this.busUi, t + i * 0.12, 0.1, 'square', f, f, 0.14, 0.003));
+    } else if (kind === 'tick') {
+      const out = this._out(this.busSfx, pos, 14, 120, 0.2);
+      if (!out) return;
+      this._osc(out.node, t, 0.06, 'square', 2400, 2400, 0.12 * out.gain, 0.002);
+    } else if (kind === 'defused') {
+      [1200, 900, 700].forEach((f, i) => this._osc(this.busUi, t + i * 0.1, 0.14, 'triangle', f, f, 0.18, 0.003));
+    }
+  }
+
+  /** Zombie-Knurren (Infection) */
+  growl(pos) {
+    if (!this.ready) return;
+    const out = this._out(this.busSfx, pos, 10, 45, 0.2);
+    if (!out) return;
+    const t = this.ctx.currentTime;
+    const drive = this._shaper(2.5);
+    const post = this.ctx.createGain(); post.gain.value = 0.35 * out.gain;
+    drive.connect(post); post.connect(out.node);
+    this._osc(drive, t, 0.5, 'sawtooth', 90 * rand(0.85, 1.15), 60, 0.5, 0.05);
+    this._burst(drive, t, 0.45, 'lowpass', 700, 300, 1.0, 0.5, 0.05);
+  }
+
+  /** Chat-Ping (UI) */
+  chat() { if (this.ready) this._osc(this.busUi, this.ctx.currentTime, 0.05, 'sine', 1500, 1500, 0.08, 0.003); }
+
+  /** Waffe aufgehoben */
+  pickupWeapon() {
+    if (!this.ready) return;
+    const t = this.ctx.currentTime;
+    this._burst(this.busUi, t, 0.05, 'bandpass', 1500, 900, 1.5, 0.25, 0.002);
+    this._osc(this.busUi, t + 0.04, 0.08, 'square', 900, 1300, 0.12, 0.003);
+  }
+
+  /** Killstreak / Objective-Meldungen (UI) */
+  reward(level) {
+    if (!this.ready) return;
+    const t = this.ctx.currentTime;
+    const base = level >= 7 ? 660 : level >= 5 ? 560 : 480;
+    this._osc(this.busUi, t, 0.12, 'triangle', base, base, 0.2, 0.005);
+    this._osc(this.busUi, t + 0.1, 0.12, 'triangle', base * 1.25, base * 1.25, 0.2, 0.005);
+    this._osc(this.busUi, t + 0.2, 0.24, 'triangle', base * 1.5, base * 1.5, 0.22, 0.005);
+  }
+  uavPing() {
+    if (!this.ready) return;
+    const t = this.ctx.currentTime;
+    this._osc(this.busUi, t, 0.18, 'sine', 1400, 1380, 0.1, 0.005);
+  }
+  objective(kind) {
+    if (!this.ready) return;
+    const t = this.ctx.currentTime;
+    if (kind === 'pickup') { this._osc(this.busUi, t, 0.1, 'square', 700, 900, 0.14, 0.005); this._osc(this.busUi, t + 0.1, 0.12, 'square', 1000, 1100, 0.14, 0.005); }
+    else if (kind === 'capture') { [520, 660, 780, 1040].forEach((f, i) => this._osc(this.busUi, t + i * 0.09, 0.16, 'triangle', f, f, 0.22, 0.005)); }
+    else if (kind === 'lost') { [700, 520, 400].forEach((f, i) => this._osc(this.busUi, t + i * 0.12, 0.18, 'triangle', f, f, 0.2, 0.005)); }
+    else if (kind === 'return') { this._osc(this.busUi, t, 0.16, 'sine', 900, 1200, 0.18, 0.005); }
+    else if (kind === 'zone') { this._osc(this.busUi, t, 0.12, 'square', 600, 600, 0.12, 0.005); this._osc(this.busUi, t + 0.14, 0.12, 'square', 600, 600, 0.12, 0.005); }
+    else if (kind === 'level') { this._osc(this.busUi, t, 0.08, 'square', 880, 880, 0.14, 0.004); this._osc(this.busUi, t + 0.08, 0.14, 'square', 1320, 1320, 0.16, 0.004); }
+  }
+
+  /** Regen als Dauerrauschen an/aus */
+  rain(on) {
+    if (!this.ready) return;
+    if (on && !this._rain) {
+      const c = this.ctx;
+      const src = c.createBufferSource();
+      src.buffer = this.noiseBuf; src.loop = true;
+      const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 1500;
+      const hp = c.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 300;
+      const g = c.createGain(); g.gain.value = 0.0001;
+      src.connect(hp); hp.connect(lp); lp.connect(g); g.connect(this.busSfx);
+      src.start();
+      g.gain.exponentialRampToValueAtTime(0.11, c.currentTime + 1.5);
+      this._rain = { src, g };
+    } else if (!on && this._rain) {
+      const r = this._rain; this._rain = null;
+      r.g.gain.exponentialRampToValueAtTime(0.0001, this.ctx.currentTime + 0.8);
+      setTimeout(() => { try { r.src.stop(); } catch (e) {} }, 900);
+    }
+  }
+  thunder() {
+    if (!this.ready) return;
+    const t = this.ctx.currentTime;
+    const drive = this._shaper(2.5);
+    const post = this.ctx.createGain(); post.gain.value = 0.5;
+    drive.connect(post); post.connect(this.busSfx);
+    this._burst(drive, t, 0.5, 'lowpass', 900, 120, 0.7, 0.9, 0.05);
+    this._burst(this.busSfx, t + 0.2, 2.2, 'lowpass', 400, 100, 0.6, 0.3, 0.3);
+    this._bodyOsc(drive, t, 0.8, 90, 30, 0.6);
+  }
+
   _energyShot(pos, opt) {
     const out = this._out(this.busSfx, pos, 14, 120, 0.25);
     if (!out) return;
@@ -309,23 +555,154 @@ export class AudioEngine {
    */
   hitmarker(headshot, kill, dist = 0) {
     if (!this.ready) return;
+    const kind = settings.hitSound || 'classic';
+    if (kind === 'none') return;
     const far = clamp((dist - 18) / 70, 0, 1);
     const t = this.ctx.currentTime + clamp(dist / 360, 0, 0.15);
     const d = this.busUi;
-    const vol = 1 - far * 0.35;
+    const hv = settings.volHit !== undefined ? settings.volHit : 1;
+    const vol = (1 - far * 0.35) * hv;
     const pitch = 1 + far * 0.35;
-    if (headshot) {
-      this._osc(d, t, 0.10, 'sine', 2600 * pitch, 2500 * pitch, 0.22 * vol, 0.002);
-      this._osc(d, t, 0.14, 'sine', 3900 * pitch, 3800 * pitch, 0.10 * vol, 0.002);
-      this._burst(d, t, 0.02, 'highpass', 4000, 4000, 0.6, 0.25 * vol, 0.001);
-    } else {
-      this._burst(d, t, 0.025, 'bandpass', 1800 * pitch, 1200 * pitch, 1.5 + far, 0.35 * vol, 0.001);
-      this._osc(d, t, 0.045 - far * 0.015, 'sine', 1100 * pitch, 750 * pitch, 0.22 * vol * (1 - far * 0.4), 0.002);
-      if (far < 0.5) this._bodyOsc(d, t, 0.05, 320, 140, 0.12 * (1 - far * 2));   // nah: mit Koerper
+    const hs = headshot ? 1.35 : 1;
+
+    switch (kind) {
+      case 'click':
+        // Trockener Mausklick-Tick
+        this._osc(d, t, 0.018, 'square', 3200 * pitch * hs, 1400 * pitch, 0.22 * vol, 0.0008);
+        this._burst(d, t, 0.012, 'highpass', 6000, 6000, 0.5, 0.3 * vol, 0.0006);
+        if (headshot) this._osc(d, t + 0.03, 0.018, 'square', 4200 * pitch, 1800 * pitch, 0.2 * vol, 0.0008);
+        break;
+      case 'ping':
+        this._osc(d, t, 0.13, 'sine', 1900 * pitch * hs, 1850 * pitch * hs, 0.26 * vol, 0.002);
+        this._osc(d, t, 0.09, 'sine', 3800 * pitch * hs, 3700 * pitch * hs, 0.08 * vol, 0.002);
+        this._burst(d, t, 0.012, 'highpass', 5000, 5000, 0.6, 0.18 * vol, 0.001);
+        break;
+      case 'bass':
+        this._bodyOsc(d, t, 0.11, 240 * hs, 60, 0.5 * vol);
+        this._burst(d, t, 0.02, 'lowpass', 1200, 500, 0.8, 0.35 * vol, 0.001);
+        if (headshot) this._osc(d, t, 0.07, 'sine', 900 * pitch, 850 * pitch, 0.16 * vol, 0.002);
+        break;
+      case 'retro': {
+        // 8-Bit: kurzes Rechteck-Arpeggio
+        const base = (headshot ? 1180 : 880) * pitch;
+        this._osc(d, t, 0.035, 'square', base, base, 0.14 * vol, 0.001);
+        this._osc(d, t + 0.035, 0.035, 'square', base * 1.5, base * 1.5, 0.14 * vol, 0.001);
+        if (headshot) this._osc(d, t + 0.07, 0.05, 'square', base * 2, base * 2, 0.12 * vol, 0.001);
+        break;
+      }
+      case 'wood':
+        this._burst(d, t, 0.05, 'lowpass', 1400 * hs, 500, 0.9, 0.5 * vol, 0.001);
+        this._bodyOsc(d, t, 0.06, 520 * hs, 190, 0.32 * vol);
+        if (headshot) { this._burst(d, t + 0.06, 0.05, 'lowpass', 1700, 600, 0.9, 0.4 * vol, 0.001); this._bodyOsc(d, t + 0.06, 0.05, 640, 240, 0.25 * vol); }
+        break;
+      case 'bell':
+        this._osc(d, t, 0.28, 'triangle', 2400 * hs, 2380 * hs, 0.2 * vol, 0.002);
+        this._osc(d, t, 0.2, 'sine', 3600 * hs, 3580 * hs, 0.08 * vol, 0.002);
+        this._osc(d, t, 0.12, 'sine', 1200 * hs, 1190 * hs, 0.06 * vol, 0.002);
+        break;
+      default:
+        if (headshot) {
+          this._osc(d, t, 0.10, 'sine', 2600 * pitch, 2500 * pitch, 0.22 * vol, 0.002);
+          this._osc(d, t, 0.14, 'sine', 3900 * pitch, 3800 * pitch, 0.10 * vol, 0.002);
+          this._burst(d, t, 0.02, 'highpass', 4000, 4000, 0.6, 0.25 * vol, 0.001);
+        } else {
+          this._burst(d, t, 0.025, 'bandpass', 1800 * pitch, 1200 * pitch, 1.5 + far, 0.35 * vol, 0.001);
+          this._osc(d, t, 0.045 - far * 0.015, 'sine', 1100 * pitch, 750 * pitch, 0.22 * vol * (1 - far * 0.4), 0.002);
+          if (far < 0.5) this._bodyOsc(d, t, 0.05, 320, 140, 0.12 * (1 - far * 2) * hv);   // nah: mit Koerper
+        }
     }
     if (kill) {
-      this._burst(d, t + 0.05, 0.03, 'bandpass', 1500, 900, 1.5, 0.3, 0.001);
-      this._osc(d, t + 0.05, 0.06, 'sine', 900, 600, 0.2, 0.002);
+      this._burst(d, t + 0.05, 0.03, 'bandpass', 1500, 900, 1.5, 0.3 * hv, 0.001);
+      this._osc(d, t + 0.05, 0.06, 'sine', 900, 600, 0.2 * hv, 0.002);
+    }
+  }
+
+  /** Vorschau im Menue: Treffer, Kopfschuss, Kill nacheinander */
+  previewHitsound() {
+    if (!this.ready) return;
+    this.hitmarker(false, false, 0);
+    setTimeout(() => this.hitmarker(true, false, 0), 260);
+    setTimeout(() => this.hitmarker(false, true, 0), 560);
+  }
+
+  /** Trainings-Zielscheibe getroffen (pop + Ping) */
+  targetHit(pos, kind) {
+    if (!this.ready) return;
+    const out = this._out(this.busSfx, pos, 14, 120, 0.2);
+    if (!out) return;
+    const t = this.ctx.currentTime;
+    const v = out.gain;
+    this._burst(out.node, t, 0.03, 'bandpass', 2600, 1200, 1.2, 0.5 * v, 0.001);
+    this._bodyOsc(out.node, t, 0.08, 480, 160, 0.3 * v);
+    const f = kind === 'perfect' ? 1760 : 1320;
+    this._osc(out.node, t + 0.01, 0.16, 'sine', f, f * 0.98, 0.22 * v, 0.002);
+    this._osc(out.node, t + 0.01, 0.1, 'sine', f * 2, f * 1.96, 0.06 * v, 0.002);
+  }
+
+  /** Zielscheibe erscheint */
+  targetSpawn(pos) {
+    if (!this.ready) return;
+    const out = this._out(this.busSfx, pos, 14, 120, 0.1);
+    if (!out) return;
+    const t = this.ctx.currentTime;
+    this._osc(out.node, t, 0.06, 'sine', 700, 1100, 0.12 * out.gain, 0.004);
+  }
+
+  /** Kill-Effekt-Sound am Opfer */
+  killEffect(kind, pos) {
+    if (!this.ready) return;
+    const out = this._out(this.busSfx, pos, 14, 90, 0.25);
+    if (!out) return;
+    const t = this.ctx.currentTime;
+    const v = out.gain;
+    const d = out.node;
+    switch (kind) {
+      case 'confetti':
+        // Partyknaller: Knall + Papierrascheln
+        this._burst(d, t, 0.05, 'highpass', 1800, 1800, 0.6, 0.9 * v, 0.001);
+        this._bodyOsc(d, t, 0.12, 300, 70, 0.5 * v);
+        this._burst(d, t + 0.05, 0.5, 'bandpass', 3500, 5500, 1.2, 0.18 * v, 0.05);
+        this._osc(d, t + 0.02, 0.12, 'square', 900, 1400, 0.06 * v, 0.01);
+        break;
+      case 'fireworks':
+        // Aufsteigendes Pfeifen, dann Knall und Knistern
+        this._osc(d, t, 0.22, 'sine', 600, 2200, 0.12 * v, 0.01);
+        this._burst(d, t + 0.22, 0.08, 'lowpass', 3000, 400, 0.7, 1.0 * v, 0.002);
+        this._bodyOsc(d, t + 0.22, 0.3, 200, 40, 0.6 * v);
+        for (let i = 0; i < 9; i++) {
+          this._burst(d, t + 0.3 + i * 0.045 + Math.random() * 0.03, 0.02, 'highpass', 3000, 3000, 0.5, (0.35 - i * 0.03) * v, 0.001);
+        }
+        break;
+      case 'voxel':
+        // Digitales Zerfallen
+        this._osc(d, t, 0.18, 'square', 1800, 200, 0.16 * v, 0.002);
+        this._osc(d, t, 0.12, 'sawtooth', 900, 120, 0.12 * v, 0.002);
+        for (let i = 0; i < 6; i++) this._osc(d, t + 0.05 + i * 0.03, 0.025, 'square', 2400 - i * 300, 2000 - i * 300, 0.06 * v, 0.001);
+        this._burst(d, t, 0.1, 'bandpass', 2000, 600, 2.0, 0.3 * v, 0.002);
+        break;
+      case 'soul':
+        // Sanfter Akkord
+        this._osc(d, t, 0.9, 'sine', 660, 660, 0.12 * v, 0.05);
+        this._osc(d, t + 0.1, 0.9, 'sine', 990, 990, 0.09 * v, 0.05);
+        this._osc(d, t + 0.2, 1.1, 'sine', 1320, 1320, 0.07 * v, 0.05);
+        this._burst(d, t, 1.0, 'bandpass', 800, 2400, 1.5, 0.05 * v, 0.2);
+        break;
+      case 'coins':
+        for (let i = 0; i < 6; i++) {
+          const tt = t + i * 0.07 + Math.random() * 0.03;
+          const f = 2600 + Math.random() * 1400;
+          this._osc(d, tt, 0.12, 'sine', f, f * 0.99, 0.12 * v, 0.001);
+          this._osc(d, tt, 0.06, 'sine', f * 1.5, f * 1.48, 0.05 * v, 0.001);
+          this._burst(d, tt, 0.015, 'highpass', 5000, 5000, 0.6, 0.1 * v, 0.001);
+        }
+        break;
+      case 'gore':
+        this._burst(d, t, 0.18, 'lowpass', 900, 300, 0.9, 0.8 * v, 0.003);
+        this._bodyOsc(d, t, 0.14, 200, 50, 0.4 * v);
+        this._burst(d, t + 0.05, 0.3, 'bandpass', 600, 1800, 1.2, 0.2 * v, 0.05);
+        break;
+      default:
+        break;
     }
   }
 
@@ -476,6 +853,11 @@ export class AudioEngine {
         this._burst(d, t + 0.03, 0.05, 'bandpass', 1900, 1400, 2.5, v * 0.3, 0.002);   // Rappeln
         this._osc(d, t, 0.2, 'sine', 3100 * rand(0.95, 1.05), 3000, v * 0.18, 0.002);
         this._bodyOsc(d, t, 0.06, 150, 70, v * 0.3);
+        break;
+      case 'water':
+        this._burst(d, t, 0.16, 'bandpass', 1800 * rand(0.9, 1.1), 700, 0.9, v * 1.1, 0.01);   // Platschen
+        this._burst(d, t + 0.04, 0.12, 'highpass', 3000, 3000, 0.6, v * 0.3, 0.02);
+        this._bodyOsc(d, t, 0.08, 300, 120, v * 0.3);
         break;
       default: {
         const f = rand(800, 1100);

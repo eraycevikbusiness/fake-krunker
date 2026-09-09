@@ -12,16 +12,45 @@ import { PostFX } from '../fx/post.js';
 import { refreshMaterials } from '../fx/materials.js';
 import { LocalPlayer } from './player.js';
 import { Bot } from './bot.js';
-import { CharacterModel } from './character.js';
+import { Actor } from './actor.js';
+import { CharacterModel, buildWeaponMesh } from './character.js';
 import { ViewModel } from './viewmodel.js';
+import { makePropMaterial } from '../fx/materials.js';
 import { WEAPONS, CLASSES } from './weapons.js';
 import { PHYS } from './actor.js';
+import { Training } from './training.js';
+import { figureColors, KILL_EFFECT_BY_ID, KILL_ICON_BY_ID } from './cosmetics.js';
+import { createMode, MODE_BY_ID } from './modes.js';
+import { applyWeather } from '../world/weather.js';
 import { settings } from '../core/settings.js';
 import { audio } from '../core/audio.js';
+import { teamHex, teamCss, teamAccent, applyTeamCss } from '../core/teams.js';
 import { clamp, lerp, rand, pick, makeBotNames, damp, deg, angleLerp } from '../core/utils.js';
 
-const TEAM_COLOR = { red: 0xd94a4a, blue: 0x4a86d9 };
-const TEAM_HEX = { red: '#ff6b6b', blue: '#7ab4ff' };
+// Killstreak-Belohnungen: Kills -> Belohnung
+const STREAK_REWARDS = { 3: 'uav', 5: 'shield', 7: 'airstrike' };
+const UAV_TIME = 14;
+const SHIELD_AMOUNT = 80;
+const SHIELD_TIME = 14;
+const AIRSTRIKE_EX = { radius: 7.5, damage: 135, minMult: 0.25, force: 16, selfMult: 0.5 };
+const BARREL_EX = { radius: 7.5, damage: 115, minMult: 0.25, force: 13, selfMult: 1 };
+const TEAM_NAME = { red: 'ROT', blue: 'BLAU' };
+
+// Bot-Sprueche (Chat)
+const CHAT = {
+  start: ['gl hf', 'los gehts', 'gg incoming', 'let\'s go', 'heute wird gefarmt', 'alle bereit?'],
+  kill: ['gg ez', 'zu langsam', 'nice try', 'sit', 'get good', 'ez clap', 'nächster bitte', 'der war frei'],
+  killed: ['nice shot', 'wtf', 'lag!', 'wie?!', 'ok das war gut', 'hax', 'bruh', 'meine maus spinnt', 'wo kam der her'],
+  help: ['halte durch, komme!', 'bin auf dem weg', 'deck dich, ich komme', 'hold on!'],
+  lowhp: ['brauche hilfe!', 'hp low, wo seid ihr', 'help pls', 'einer hier?'],
+  flag: ['flagge! deckt mich', 'hab die flagge, go go', 'bringt sie heim!'],
+  streak: ['unaufhaltsam', 'wer stoppt mich?', 'on fire 🔥', 'nobody can stop me'],
+  headshot: ['headshot!', 'boom, kopf', 'one tap'],
+  win: ['gg', 'gg wp', 'ez', 'good game'],
+  lose: ['gg', 'gg wp', 'next round', 'unlucky'],
+  zombie: ['braaains', 'ich rieche euch', 'lauft!', 'grrr'],
+};
+const HAIR_COLORS = [0x2a1e14, 0x120c08, 0x6b4a2c, 0xc9a55a, 0x8a2a1a, 0x3a3a40];
 const SHADOW_SIZE = { off: 0, low: 1024, high: 2048, ultra: 4096 };
 const SKINS_TONE = [0xd4a985, 0xbd8d63, 0x9a6a42, 0x6e4a2c, 0xcdb090];
 
@@ -64,6 +93,26 @@ export class Game {
     this.scores = { red: 0, blue: 0 };
     this.hist = { frames: [], head: 0, count: 0, cap: HIST_CAP, lastT: -1 };
     this.killcam = null;
+    this.training = null;
+    this.modeCtl = null;          // CTF / Hardpoint / Gun Game / Infection / S&D
+    this.teamMode = true;
+    this.weather = null;
+    this.lamps = [];
+    this.airstrikes = [];
+    this.pendingDestr = [];
+    this._destrList = [];
+    this._boardT = 0;
+    this._lightningT = 0;
+    this._spinSoundT = new Map();
+    this.ziplines = [];
+    this.zipMeshes = [];
+    this.ropes = new Map();        // Akteur -> Seil-Mesh (Enterhaken)
+    this.drops = [];               // liegende Waffen
+    this._zipSoundT = 0;
+    this._prompt = '';
+    this.rec = null;               // Match-Aufzeichnung (Replay)
+    this.replay = null;            // laufende Wiedergabe
+    this.replaying = false;
 
     this._v1 = new THREE.Vector3();
     this._v2 = new THREE.Vector3();
@@ -75,6 +124,7 @@ export class Game {
     this.muzzleLightT = 0;
 
     this.onMatchEnd = null;
+    this.onTrainingEnd = null;
   }
 
   // --------------------------------------------------------
@@ -181,10 +231,77 @@ export class Game {
     if (this.minimap) this.minimap.zoom = 1;
   }
 
+  // --------------------------------------------------------
+  // Teamfarben / -namen (Modus kann sie ueberschreiben, z.B. Infection)
+  // --------------------------------------------------------
+  teamColor(team) {
+    const m = this.modeCtl;
+    if (m && m.teamColors && m.teamColors[team]) return m.teamColors[team];
+    return teamHex(team);
+  }
+  teamCssColor(team) {
+    const m = this.modeCtl;
+    if (m && m.teamHex && m.teamHex[team]) return m.teamHex[team];
+    return teamCss(team);
+  }
+  teamName(team) {
+    const m = this.modeCtl;
+    if (m && m.teamNames && m.teamNames[team]) return m.teamNames[team];
+    return TEAM_NAME[team] || String(team).toUpperCase();
+  }
+  _applyTeamCss() {
+    const m = this.modeCtl;
+    const ov = m && m.teamHex ? { red: { css: m.teamHex.red, bg: 'rgba(60,160,60,0.55)' }, blue: { css: m.teamHex.blue, bg: 'rgba(50,110,200,0.55)' } } : null;
+    applyTeamCss(document.documentElement, ov);
+  }
+
+  /** Bot-Chat mit Abklingzeit pro Bot und global */
+  botChat(bot, kind) {
+    if (!bot || bot.isLocal || !this.running) return;
+    if (settings.botChat === false) return;
+    const now = this.time;
+    if (now - (this._chatGlobalT || -9) < 2.2) return;
+    if (now - (bot._chatT || -99) < 10) return;
+    const list = CHAT[kind];
+    if (!list) return;
+    const chance = kind === 'start' ? 0.35 : kind === 'killed' ? 0.4 : kind === 'help' || kind === 'flag' ? 0.85 : 0.5;
+    if (Math.random() > chance) return;
+    this._chatGlobalT = now; bot._chatT = now;
+    this.hud.chat(bot.name, pick(list), this.teamMode ? bot.team : null, false);
+    audio.chat();
+  }
+
+  /** Modell eines Akteurs neu bauen (Teamwechsel, Outfit) */
+  rebuildActorModel(a) {
+    if (a.model) a.model.dispose();
+    a.model = this._makeModel(a);
+    if (!a.alive) a.model.setVisible(false);
+    if (a.isLocal) {
+      this._applyPlayerOutfitToViewmodel();
+      this.viewmodel.setWeapon(a.weapon, a.skin, this.skinFor(a), this.stickerFor(a));
+    }
+  }
+
   /** Skin-Id fuer eine Waffe eines Akteurs */
   skinFor(actor, weapon) {
     const w = weapon || actor.weapon;
     return (actor.skins && actor.skins[w.id]) || 'default';
+  }
+  /** Sticker-Id fuer eine Waffe eines Akteurs */
+  stickerFor(actor, weapon) {
+    const w = weapon || actor.weapon;
+    return (actor.stickers && actor.stickers[w.id]) || 'none';
+  }
+
+  /**
+   * Farben der Spielfigur aus Team, Modus und Outfit.
+   * Im Teammodus bleibt das Schulterband, der Aermelbund und die
+   * Kopfbedeckung in Teamfarbe, damit Gegner erkennbar bleiben.
+   */
+  _figureColors(actor) {
+    const isTeam = this.teamMode;
+    const teamCol = isTeam ? this.teamColor(actor.team) : this._ffaColor(actor);
+    return figureColors(actor.outfit, teamCol, isTeam, teamAccent(actor.team));
   }
 
   // --------------------------------------------------------
@@ -193,7 +310,9 @@ export class Game {
   start(cfg) {
     this.cleanup();
 
-    this.mode = cfg.mode || 'tdm';
+    const training = !!cfg.training;
+    this.mode = training ? 'training' : (MODE_BY_ID[cfg.mode] ? cfg.mode : 'tdm');
+    this.teamMode = !training && !!MODE_BY_ID[this.mode].team;
     this.scoreLimit = cfg.scoreLimit || 40;
     this.timeLimit = (cfg.timeLimit || 10) * 60;
     this.timeLeft = this.timeLimit;
@@ -206,37 +325,52 @@ export class Game {
     this.pendingClassId = null;
     this.hist = { frames: [], head: 0, count: 0, cap: HIST_CAP, lastT: -1 };
     this.killcam = null;
+    this.airstrikes = [];
+    this.pendingDestr = [];
 
-    const mapDef = buildMap(cfg.map || 'sandstorm');
+    // Karte + Wetter/Tageszeit
+    const wx = applyWeather(buildMap(training ? 'range' : (cfg.map || 'sandstorm')), training ? 'clear' : (cfg.weather || 'clear'));
+    const mapDef = wx.map;
+    this.weather = wx;
     this.world = new World(this.scene, mapDef, this.renderer);
     this.vmScene.environment = this.scene.environment;
     this.jumpPads = mapDef.jumpPads || [];
     this._applyFog();
     this._setupLights(mapDef);
+    this._setupWeather(wx);
+    this._buildZiplines(mapDef);
     this.minimap.build(mapDef);
 
     this.effects = new Effects(this.scene);
     this.viewmodel.setFlashTexture(this.effects.flashTex);
+    this.effects.setRain(!!wx.rain);
+    audio.rain(!!wx.rain);
 
     this.pickups = (mapDef.pickups || []).map((p) => this._makePickup(p));
 
     const localTeam = 'red';
     this.player = new LocalPlayer(this, {
       name: (cfg.name || 'Player').slice(0, 16) || 'Player',
-      team: this.mode === 'ffa' ? 'ffa0' : localTeam,
+      team: this.teamMode ? localTeam : 'ffa0',
       classId: cfg.classId || 'triggerman',
+      attachments: cfg.attachments || {},
     });
     this.player.thirdPerson = settings.thirdPerson;
     this.player.skins = cfg.skins || {};
+    this.player.stickers = cfg.stickers || {};
+    this.player.outfit = cfg.outfit || 'team';
+    this.player.hat = cfg.hat || 'none';
+    this.player.killEffect = cfg.killEffect || 'none';
+    this.player.killIcon = cfg.killIcon || 'none';
     this.player.model = this._makeModel(this.player);
     this.actors = [this.player];
 
-    const botCount = clamp(cfg.bots | 0, 1, 15);
-    const names = makeBotNames(botCount);
+    const botCount = training ? 0 : clamp(cfg.bots | 0, 1, 15);
+    const names = makeBotNames(Math.max(1, botCount));
     const classIds = CLASSES.map(c => c.id);
     for (let i = 0; i < botCount; i++) {
       let team;
-      if (this.mode === 'ffa') team = 'ffa' + (i + 1);
+      if (!this.teamMode) team = 'ffa' + (i + 1);
       else team = (i % 2 === 0) ? 'blue' : 'red';
       const bot = new Bot(this, {
         name: names[i],
@@ -248,9 +382,19 @@ export class Game {
       this.actors.push(bot);
     }
 
+    if (training) this.training = new Training(this, cfg.training);
+
+    // Modus mit Zielen (CTF, Hardpoint, Gun Game, Infection, S&D)
+    this.modeCtl = training ? null : createMode(this.mode, this, mapDef, this.scoreLimit, this.timeLimit);
+    if (this.modeCtl && this.modeCtl.setupActor) {
+      for (const a of this.actors) this.modeCtl.setupActor(a);
+      // Teamfarben koennen sich geaendert haben (Infection) -> Modelle neu
+      for (const a of this.actors) { if (a.model) a.model.dispose(); a.model = this._makeModel(a); }
+    }
+    this._applyTeamCss();
+
     for (const a of this.actors) this.respawn(a, true);
 
-    this.viewmodel.setWeapon(this.player.weapon, this.player.skin, this.skinFor(this.player));
     this.player.applyCamera(this.camera, this.world, 0.016);
     this.camera.updateMatrixWorld();
 
@@ -258,11 +402,260 @@ export class Game {
     this.hud.show(true);
     this.hud.hideDeath();
     this.hud.setKillcam(null);
+    this.hud.setTraining(null);
+    this.hud.setMyTeam(this.teamMode ? this.player.team : null);
     this.hud.setMinimapVisible(settings.showMinimap);
     this.running = true;
     this.paused = false;
 
-    this.hud.toast('MATCH GESTARTET', true);
+    // Aufzeichnung fuer das Replay (20 Hz, alle Akteure)
+    this.rec = training ? null : {
+      rate: 1 / 20, lastT: -1, frames: [],
+      meta: {
+        map: cfg.map || 'sandstorm', weather: cfg.weather || 'clear', mode: this.mode, scoreLimit: this.scoreLimit,
+        weaponIds: Object.keys(WEAPONS),
+        actors: this.actors.map(a => ({
+          name: a.name, team: a.team, classId: a.classDef.id, isLocal: !!a.isLocal,
+          outfit: a.outfit || 'team', hat: a.hat || 'none', skin: a.skin, hair: a.hair,
+          skins: Object.assign({}, a.skins || {}), stickers: Object.assign({}, a.stickers || {}),
+        })),
+      },
+    };
+
+    if (this.training) this.training.start();
+    else {
+      this.hud.toast('MATCH GESTARTET', true);
+      if (this.teamMode) this.hud.toast('DU BIST TEAM ' + this.teamName(this.player.team), false, this.player.team);
+      if (this.modeCtl && MODE_BY_ID[this.mode]) this.hud.toast(MODE_BY_ID[this.mode].name.toUpperCase(), true);
+      const talker = this.actors.find(a => a.isBot);
+      if (talker) setTimeout(() => this.botChat(talker, 'start'), 1500);
+    }
+  }
+
+  // --------------------------------------------------------
+  // Seilbahnen, Enterhaken-Seile, liegende Waffen, Interaktion
+  // --------------------------------------------------------
+  _buildZiplines(mapDef) {
+    for (const m of this.zipMeshes) { this.scene.remove(m); m.geometry.dispose(); }
+    this.zipMeshes = [];
+    this.ziplines = mapDef.ziplines || [];
+    if (!this._zipMat) this._zipMat = new THREE.MeshStandardMaterial({ color: 0x2a2d33, roughness: 0.5, metalness: 0.8 });
+    for (const z of this.ziplines) {
+      const len = Math.hypot(z.b.x - z.a.x, z.b.y - z.a.y, z.b.z - z.a.z);
+      const geo = new THREE.CylinderGeometry(0.05, 0.05, len, 6, 1);
+      geo.rotateX(Math.PI / 2);                 // Laenge entlang +Z
+      const mesh = new THREE.Mesh(geo, this._zipMat);
+      mesh.position.set((z.a.x + z.b.x) / 2, (z.a.y + z.b.y) / 2, (z.a.z + z.b.z) / 2);
+      mesh.lookAt(z.b.x, z.b.y, z.b.z);
+      mesh.castShadow = true;
+      this.scene.add(mesh);
+      this.zipMeshes.push(mesh);
+    }
+  }
+
+  /** Verfuegbare Interaktion fuer einen Akteur: {type:'zip'|'drop'|'bomb', ...} oder null */
+  interactionFor(actor) {
+    if (!actor.alive || !this.world) return null;
+    if (!actor.zip && actor.zipCooldown <= 0) {
+      for (const z of this.ziplines) {
+        for (const [end, fromA] of [[z.a, true], [z.b, false]]) {
+          const dx = actor.pos.x - end.x, dz = actor.pos.z - end.z;
+          if (dx * dx + dz * dz > 2.6 * 2.6) continue;
+          if (actor.pos.y < end.y - 3.6 || actor.pos.y > end.y + 0.6) continue;
+          return { type: 'zip', z, fromA, label: 'SEILBAHN' };
+        }
+      }
+    }
+    for (const d of this.drops) {
+      const dx = actor.pos.x - d.x, dz = actor.pos.z - d.z;
+      if (dx * dx + dz * dz < 1.9 * 1.9 && Math.abs(actor.pos.y - d.y) < 2.2) return { type: 'drop', d, label: d.w.name.toUpperCase() + ' AUFHEBEN' };
+    }
+    if (this.modeCtl && this.modeCtl.interactionFor) {
+      const ia = this.modeCtl.interactionFor(actor);
+      if (ia) return ia;
+    }
+    return null;
+  }
+
+  _processInteractions() {
+    for (const a of this.actors) {
+      if (!a.intent.interact) continue;
+      a.intent.interact = false;
+      const ia = this.interactionFor(a);
+      if (!ia) continue;
+      if (ia.type === 'zip') a.attachZip(ia.z, ia.fromA);
+      else if (ia.type === 'drop') this.pickupDrop(a, ia.d);
+      else if (ia.type === 'bomb' && this.modeCtl.interact) this.modeCtl.interact(a, ia);
+    }
+  }
+
+  /** Beim Tod: Primaerwaffe fallen lassen */
+  _dropWeapon(victim) {
+    if (this.training || this.mode === 'gungame') return;
+    const s = victim.slots[0];
+    if (!s || !s.w || s.w.melee || s.w.mag === Infinity) return;
+    if (s.mag <= 0 && s.reserve <= 0) return;
+    if (!this._dropMat) this._dropMat = makePropMaterialDrop();
+    const y = this.world.groundAt(victim.pos.x, victim.pos.z, victim.pos.y + 1.5);
+    const mesh = buildWeaponMesh(s.w, 1.0, this._dropMat, this.skinFor(victim, s.w), this.stickerFor(victim, s.w));
+    mesh.position.set(victim.pos.x + rand(-0.4, 0.4), y + 0.16, victim.pos.z + rand(-0.4, 0.4));
+    mesh.rotation.set(0, rand(0, Math.PI * 2), Math.PI / 2);
+    this.scene.add(mesh);
+    const ring = new THREE.Mesh(this._ringGeo || (this._ringGeo = new THREE.BoxGeometry(1.5, 0.06, 1.5)),
+      new THREE.MeshBasicMaterial({ color: 0xffcc00, transparent: true, opacity: 0.3 }));
+    ring.position.set(mesh.position.x, y + 0.03, mesh.position.z);
+    this.scene.add(ring);
+    this.drops.push({ w: s.w, mag: s.mag, reserve: Math.max(s.reserve, Math.floor(s.w.mag * 1.5)), x: mesh.position.x, y, z: mesh.position.z, t: 30, mesh, ring, skin: this.skinFor(victim, s.w), sticker: this.stickerFor(victim, s.w) });
+    while (this.drops.length > 12) this._removeDrop(0);
+  }
+
+  _removeDrop(i) {
+    const d = this.drops[i];
+    this.scene.remove(d.mesh, d.ring);
+    d.ring.material.dispose();
+    this.drops.splice(i, 1);
+  }
+
+  pickupDrop(actor, d) {
+    const i = this.drops.indexOf(d);
+    if (i < 0) return;
+    const idx = d.w.slot === 1 ? 1 : 0;
+    // Aktuelle Waffe an derselben Stelle liegen lassen
+    const cur = actor.slots[idx];
+    actor.slots[idx] = { w: d.w, mag: d.mag, reserve: d.reserve, pendingSingle: 0 };
+    if (actor.skins) actor.skins[d.w.id] = d.skin;
+    if (actor.stickers) actor.stickers[d.w.id] = d.sticker;
+    this._removeDrop(i);
+    if (cur && cur.w && !cur.w.melee && cur.w.mag !== Infinity && (cur.mag > 0 || cur.reserve > 0)) {
+      const saved = actor.slots[0]; actor.slots[0] = cur;
+      this._dropWeapon(actor);
+      actor.slots[0] = saved;
+    }
+    if (actor.slot === idx) {
+      actor.reloadTimer = 0; actor.chargeT = 0; actor.spinT = 0; actor.switchTimer = d.w.switchTime || 0.4;
+      this.onWeaponSwitch(actor);
+    } else if (actor.model) {
+      actor.model.setWeapon(actor.weapon, this.skinFor(actor), this.stickerFor(actor));
+    }
+    if (actor.isLocal) { audio.pickupWeapon(); this.hud.toast(d.w.name.toUpperCase() + ' AUFGEHOBEN', true); }
+    if (actor.isBot) actor._updatePreferredRange();
+  }
+
+  _updateDrops(dt) {
+    for (let i = this.drops.length - 1; i >= 0; i--) {
+      const d = this.drops[i];
+      d.t -= dt;
+      if (d.t <= 0) { this._removeDrop(i); continue; }
+      d.mesh.position.y = d.y + 0.16 + Math.sin(this.time * 2.5 + i) * 0.04;
+      d.ring.rotation.y += dt * 0.9;
+      d.ring.material.opacity = 0.2 + Math.sin(this.time * 3) * 0.08;
+      if (d.t < 4) d.mesh.visible = (this.time * 6 | 0) % 2 === 0;
+    }
+  }
+
+  /** Enterhaken-Seile zeichnen */
+  _updateRopes() {
+    for (const a of this.actors) {
+      const g = a.alive ? a.grapple : null;
+      let m = this.ropes.get(a);
+      if (!g) { if (m) { m.visible = false; } continue; }
+      if (!m) {
+        m = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, 1), new THREE.MeshStandardMaterial({ color: 0x3a3a3a, roughness: 0.7, metalness: 0.3 }));
+        m.frustumCulled = false;
+        this.scene.add(m);
+        this.ropes.set(a, m);
+      }
+      m.visible = true;
+      let sx, sy, sz;
+      if (a.isLocal && !(a.thirdPerson || settings.thirdPerson) && !this.killcam) {
+        const c = this.camera;
+        const r = this._v3.set(1, 0, 0).applyQuaternion(c.quaternion);
+        sx = c.position.x + r.x * 0.32; sy = c.position.y - 0.22; sz = c.position.z + r.z * 0.32;
+      } else {
+        sx = a.pos.x; sy = a.pos.y + 1.55; sz = a.pos.z;
+      }
+      const len = Math.hypot(g.x - sx, g.y - sy, g.z - sz);
+      m.position.set((sx + g.x) / 2, (sy + g.y) / 2, (sz + g.z) / 2);
+      m.lookAt(g.x, g.y, g.z);
+      m.scale.set(1, 1, Math.max(0.01, len));
+    }
+  }
+
+  /** Wetter: Laternen (Punktlichter) fuer die Nacht, nasse Oberflaechen, Gewitter */
+  _setupWeather(wx) {
+    for (const l of this.lamps) { this.scene.remove(l); l.dispose && l.dispose(); }
+    this.lamps = [];
+    for (const p of wx.lamps || []) {
+      const light = new THREE.PointLight(0xffd9a0, 48, 32, 1.7);
+      light.position.set(p.x, p.y + 4.4, p.z);
+      this.scene.add(light);
+      this.lamps.push(light);
+    }
+    if (wx.wet && this.world && this.world.meshSolid) {
+      const m = this.world.meshSolid.material;
+      m.roughness = 0.55;
+      m.envMapIntensity = 0.75;
+    }
+    this._lightningT = wx.lightning ? rand(4, 10) : 0;
+    this._flashT = 0;
+  }
+
+  _updateWeather(dt) {
+    if (!this.weather || !this.weather.lightning || !this.sun) return;
+    this._lightningT -= dt;
+    if (this._lightningT <= 0) {
+      this._lightningT = rand(7, 20);
+      this._flashT = 0.16;
+      const d = rand(0.4, 1.8);
+      setTimeout(() => { if (this.running) audio.thunder(); }, d * 1000);
+    }
+    if (this._flashT > 0) {
+      this._flashT -= dt;
+      const k = this._flashT > 0 ? (0.5 + Math.random() * 0.5) : 0;
+      this.sun.intensity = this.world.map.sunIntensity * 2.0 + k * 9;
+      this.hemi.intensity = this.world.map.ambIntensity * 0.85 + k * 2.5;
+      if (this._flashT <= 0) { this.sun.intensity = this.world.map.sunIntensity * 2.0; this.hemi.intensity = this.world.map.ambIntensity * 0.85; }
+    }
+  }
+
+  _applyPlayerOutfitToViewmodel() {
+    const c = this._figureColors(this.player);
+    this.viewmodel.setOutfit(c.sleeve, c.cuff);
+  }
+
+  /** Spielfigur des lokalen Spielers neu bauen (Outfit/Hut im Menue geaendert) */
+  rebuildPlayerModel() {
+    if (!this.player || !this.world) return;
+    this.rebuildActorModel(this.player);
+  }
+
+  /** Aufsaetze des Spielers im Menue geaendert */
+  setPlayerAttachments(att) {
+    const p = this.player;
+    if (!p || !this.world) return;
+    p.attachments = att || {};
+    p.refreshAttachments();
+    if (p.alive && !this.killcam) this.onWeaponSwitch(p);
+    else if (p.model) p.model.setWeapon(p.weapon, this.skinFor(p), this.stickerFor(p));
+  }
+
+  /** Teamfarben-Einstellung geaendert: alle Figuren und das HUD neu faerben */
+  refreshTeamColors() {
+    if (!this.world) return;
+    this._applyTeamCss();
+    for (const a of this.actors) this.rebuildActorModel(a);
+  }
+
+  /** Trainings-Drill beendet: Ergebnis nach aussen melden */
+  endTraining(results) {
+    if (this.over) return;
+    this.over = true;
+    this.running = false;
+    this.viewmodel.setHidden(true);
+    this.hud.setScope(false);
+    this.input.exitLock();
+    audio.win();
+    if (this.onTrainingEnd) this.onTrainingEnd(results);
   }
 
   _botDifficulty(i, n) {
@@ -298,18 +691,24 @@ export class Game {
   }
 
   _makeModel(actor) {
-    const isTeam = this.mode !== 'ffa';
-    const color = isTeam ? TEAM_COLOR[actor.team] : this._ffaColor(actor);
-    actor.skin = pick(SKINS_TONE);
+    if (!actor.skin) actor.skin = pick(SKINS_TONE);
+    if (!actor.hair) actor.hair = pick(HAIR_COLORS);
+    const c = this._figureColors(actor);
     const m = new CharacterModel(this.scene, {
-      color,
-      accent: isTeam ? (actor.team === 'red' ? 0xffb0b0 : 0xb0d0ff) : 0xffffff,
-      pants: 0x2a3040,
+      color: c.body,
+      accent: c.accent,
+      pants: c.pants,
+      cuff: c.cuff,
+      arm: c.arm,
       skin: actor.skin,
+      hair: actor.hair,
+      hat: actor.hat || 'none',
+      hatPrimary: c.hatPrimary,
+      hatSecondary: c.hatSecondary,
       world: this.world,
       effects: this.effects,
     });
-    m.setWeapon(actor.weapon, this.skinFor(actor));
+    m.setWeapon(actor.weapon, this.skinFor(actor), this.stickerFor(actor));
     return m;
   }
 
@@ -347,7 +746,20 @@ export class Game {
   cleanup() {
     this.running = false;
     this.killcam = null;
-    if (this.hud) this.hud.setKillcam(null);
+    if (this.training) { this.training.dispose(); this.training = null; }
+    if (this.modeCtl) { this.modeCtl.dispose(); this.modeCtl = null; }
+    for (const l of this.lamps) this.scene.remove(l);
+    this.lamps = [];
+    this.airstrikes = [];
+    this.pendingDestr = [];
+    for (const m of this.zipMeshes) { this.scene.remove(m); m.geometry.dispose(); }
+    this.zipMeshes = [];
+    this.ziplines = [];
+    for (const m of this.ropes.values()) { this.scene.remove(m); m.geometry.dispose(); m.material.dispose(); }
+    this.ropes.clear();
+    while (this.drops.length) this._removeDrop(0);
+    audio.rain(false);
+    if (this.hud) { this.hud.setKillcam(null); this.hud.setTraining(null); this.hud.setMyTeam(null); this.hud.updateObjective(null); this.hud.updateStreaks(null); this.hud.updateBoard(null); }
     for (const a of this.actors || []) if (a.model) a.model.dispose();
     this.actors = [];
     for (const p of this.projectiles || []) if (p.mesh) { this.scene.remove(p.mesh); p.mesh.material.dispose(); }
@@ -370,13 +782,13 @@ export class Game {
   sameTeam(a, b) {
     if (!a || !b) return false;
     if (a === b) return true;
-    if (this.mode === 'ffa') return false;
+    if (!this.teamMode) return false;
     return a.team === b.team;
   }
 
   enemySpawnsFor(actor) {
     const m = this.world.map;
-    if (this.mode === 'ffa') return m.spawnsFfa;
+    if (!this.teamMode) return m.spawnsFfa;
     return actor.team === 'red' ? m.spawnsBlue : m.spawnsRed;
   }
 
@@ -387,7 +799,8 @@ export class Game {
   // --------------------------------------------------------
   spawnPointsFor(actor) {
     const m = this.world.map;
-    if (this.mode === 'ffa') return m.spawnsFfa;
+    if (this.modeCtl && this.modeCtl.spawnPointsFor) return this.modeCtl.spawnPointsFor(actor);
+    if (!this.teamMode) return m.spawnsFfa;
     const list = actor.team === 'red' ? m.spawnsRed : m.spawnsBlue;
     return list.length ? list : m.spawnsFfa;
   }
@@ -397,6 +810,7 @@ export class Game {
       actor.setClass(this.pendingClassId);
       this.pendingClassId = null;
     }
+    if (this.modeCtl && this.modeCtl.beforeRespawn) this.modeCtl.beforeRespawn(actor);
     if (actor.isLocal) this.endKillcam();
 
     const points = this.spawnPointsFor(actor);
@@ -434,18 +848,23 @@ export class Game {
       }
     }
     actor.spawn({ x: sx, y: sy, z: sz, yaw: best.yaw });
+    if (this.training && actor.isLocal) {
+      // Unbegrenzte Reserve im Training
+      for (const s of actor.slots) if (s.w.mag !== Infinity) s.reserve = 9999;
+    }
     if (actor.model) {
       actor.model.resetDeath();
-      actor.model.setWeapon(actor.weapon, this.skinFor(actor));
+      actor.model.setWeapon(actor.weapon, this.skinFor(actor), this.stickerFor(actor));
       actor.model.setVisible(true);
     }
     if (this.effects) {
-      const col = this.mode === 'ffa' ? this._ffaColor(actor) : TEAM_COLOR[actor.team];
+      const col = !this.teamMode ? this._ffaColor(actor) : this.teamColor(actor.team);
       this.effects.spawnFlash(actor.pos.x, actor.pos.y, actor.pos.z, col);
     }
     if (actor.isLocal) {
       this.hud.hideDeath();
-      this.viewmodel.setWeapon(actor.weapon, actor.skin, this.skinFor(actor));
+      this._applyPlayerOutfitToViewmodel();     // nach der Killcam wieder die eigenen Aermel
+      this.viewmodel.setWeapon(actor.weapon, actor.skin, this.skinFor(actor), this.stickerFor(actor));
       this.viewmodel.setHidden(false);
       if (!initial) { audio.tone(540, 0.09, 0.2, 'sine'); audio.draw(null, actor.weapon.hold); }
     }
@@ -471,15 +890,18 @@ export class Game {
     return out;
   }
 
-  fireWeapon(actor, heavy) {
+  fireWeapon(actor, heavy, power) {
     const w = actor.weapon;
-    actor.lastLoudTime = this.time;
+    // Schallgedaempft: Bots hoeren den Schuss nur ganz kurz (0.3 s statt 1.2 s Fenster)
+    actor.lastLoudTime = w.suppressed ? this.time - 0.9 : this.time;
+    const pw = power === undefined ? 1 : power;
 
     const eye = actor.eyePos(this._v1);
     const dir = actor.lookDir(this._v2);
     this.muzzleWorld(actor, this._muzzle);
 
     const soundPos = actor.isLocal ? null : { x: actor.pos.x, y: actor.pos.y + 1.6, z: actor.pos.z };
+    if (actor.isBot && actor.onShotFired) actor.onShotFired(w);
     if (w.melee) {
       const h = heavy && w.heavy ? w.heavy : null;
       const def = h ? Object.assign({ id: w.id, headMult: w.headMult, knockback: w.knockback }, h) : w;
@@ -495,19 +917,23 @@ export class Game {
     }
 
     actor.lastShotTime = this.time;
-    audio.shot(soundPos, w.sound);
+    audio.shot(soundPos, w.charge ? Object.assign({ power: pw }, w.sound) : w.sound);
+    if (actor.isLocal && this.training) this.training.onShot();
 
     if (actor.isLocal) {
-      this.viewmodel.fire(1);
+      if (w.throwWeapon) this.viewmodel.throwKnife(w.reloadTime);
+      else this.viewmodel.fire(w.flame ? 0.15 : 1);
       actor.addRecoil(
-        deg(w.recoilV) * rand(0.75, 1.15),
+        deg(w.recoilV) * rand(0.75, 1.15) * pw,
         deg(w.recoilH) * rand(-1, 1)
       );
       actor.addShake(w.kick * 1.4);
-      this.muzzleLight.position.copy(this._muzzle);
-      this.muzzleLight.visible = true;
-      this.muzzleLightT = 1;
-      if (!w.projectile && this.effects) {
+      if (!w.flame && !w.throwWeapon && !w.charge && !w.suppressed) {
+        this.muzzleLight.position.copy(this._muzzle);
+        this.muzzleLight.visible = true;
+        this.muzzleLightT = 1;
+      }
+      if (!w.projectile && !w.flame && this.effects) {
         const right = this._v3.set(1, 0, 0).applyQuaternion(this.camera.quaternion);
         this.effects.shell(
           this._muzzle.x - dir.x * 0.9 + right.x * 0.12,
@@ -517,14 +943,14 @@ export class Game {
         );
       }
     } else {
-      if (actor.model) actor.model.triggerRecoil(0.8);
-      if (this.effects) {
+      if (actor.model) actor.model.triggerRecoil(w.flame ? 0.1 : 0.8);
+      if (this.effects && !w.flame && !w.throwWeapon && !w.charge && !w.suppressed) {
         this.effects.muzzleFlash(this._muzzle.x, this._muzzle.y, this._muzzle.z, dir.x, dir.y, dir.z, 0.7);
       }
     }
 
     if (w.projectile) {
-      this.spawnProjectile(actor, w, this._muzzle, dir, w.projectile);
+      this.spawnProjectile(actor, w, this._muzzle, dir, w.projectile, pw);
       return;
     }
 
@@ -534,14 +960,22 @@ export class Game {
     const acc = this._dmgAcc;
     acc.clear();
 
+    if (w.flame && this.effects) this.effects.flame(this._muzzle.x, this._muzzle.y, this._muzzle.z, dir.x, dir.y, dir.z);
+
     for (let i = 0; i < pellets; i++) {
       const d = this._spreadDir(dir, spread, this._v3);
-      const r = this._hitscan(actor, eye, d, w, acc);
+      const r = this._hitscan(actor, eye, d, w, acc, !!w.flame);
       if (r.actorHit) {
         anyHit = true; if (r.head) anyHead = true; if (r.killed) anyKill = true;
         hitDist = Math.hypot(r.x - eye.x, r.y - eye.y, r.z - eye.z);
+        // Brandschaden: brennt nach dem Treffer weiter
+        if (w.burn && r.victim && r.victim.alive) {
+          r.victim.burnT = w.burn.time;
+          r.victim.burnFrom = actor;
+          r.victim.burnDps = w.burn.dps;
+        }
       }
-      if (this.effects && (pellets === 1 || i % 2 === 0)) {
+      if (this.effects && !w.flame && (pellets === 1 || i % 2 === 0)) {
         this.effects.tracer(
           this._muzzle.x, this._muzzle.y, this._muzzle.z,
           r.x, r.y, r.z, w.tracer, w.tracerWidth
@@ -550,13 +984,18 @@ export class Game {
     }
 
     if (actor.isLocal) {
-      acc.forEach((v) => {
-        if (v.dmg > 0) this.hud.popup(v.x, v.y, v.z, Math.round(v.dmg), v.killed ? 'kill' : v.head ? 'head' : '');
-      });
-      if (anyHit) {
-        this.hud.hitmarker(anyKill ? 'kill' : anyHead ? 'head' : 'hit');
-        audio.hitmarker(anyHead, anyKill, hitDist);
-        this._hitTint = 0.14;
+      // Flammenwerfer: Zahlen und Ticks nur alle 0.2 s, sonst Dauerfeuer im HUD
+      const throttle = w.flame && (this.time - (actor._lastHitmark || -9)) < 0.2 && !anyKill;
+      if (!throttle) {
+        acc.forEach((v) => {
+          if (v.dmg > 0) this.hud.popup(v.x, v.y, v.z, Math.round(v.dmg), v.killed ? 'kill' : v.head ? 'head' : '');
+        });
+        if (anyHit) {
+          actor._lastHitmark = this.time;
+          this.hud.hitmarker(anyKill ? 'kill' : anyHead ? 'head' : 'hit');
+          audio.hitmarker(anyHead, anyKill, hitDist);
+          this._hitTint = 0.14;
+        }
       }
     }
     acc.clear();
@@ -590,7 +1029,7 @@ export class Game {
     }
   }
 
-  _hitscan(shooter, eye, dir, w, acc) {
+  _hitscan(shooter, eye, dir, w, acc, quiet) {
     let remaining = w.pierce || 0;
     let ox = eye.x, oy = eye.y, oz = eye.z;
     let maxDist = w.range;
@@ -599,8 +1038,8 @@ export class Game {
     ignored.clear();
     ignored.add(shooter);
 
-    const out = this._hsOut || (this._hsOut = { x: 0, y: 0, z: 0, actorHit: false, head: false, killed: false });
-    out.actorHit = false; out.head = false; out.killed = false;
+    const out = this._hsOut || (this._hsOut = { x: 0, y: 0, z: 0, actorHit: false, head: false, killed: false, victim: null });
+    out.actorHit = false; out.head = false; out.killed = false; out.victim = null;
 
     for (let pass = 0; pass <= remaining; pass++) {
       const wallHit = this.world.raycast(ox, oy, oz, dir.x, dir.y, dir.z, maxDist);
@@ -613,6 +1052,18 @@ export class Game {
         if (a.spawnProtect > 0) continue;
         const h = a.rayHit(ox, oy, oz, dir.x, dir.y, dir.z, bestT, 0);
         if (h && h.t >= 0 && h.t < bestT) { bestT = h.t; bestActor = a; bestZone = h.zone; }
+      }
+
+      // Trainings-Zielscheiben
+      if (this.training && shooter.isLocal) {
+        const th = this.training.rayHit(ox, oy, oz, dir.x, dir.y, dir.z, bestT);
+        if (th) {
+          const hx = ox + dir.x * th.t, hy = oy + dir.y * th.t, hz = oz + dir.z * th.t;
+          out.x = hx; out.y = hy; out.z = hz;
+          out.actorHit = true; out.head = false; out.killed = false;
+          this.training.hit(th.target, hx, hy, hz);
+          break;
+        }
       }
 
       if (bestActor) {
@@ -628,6 +1079,7 @@ export class Game {
 
         out.x = hx; out.y = hy; out.z = hz;
         out.actorHit = true;
+        out.victim = bestActor;
         if (head) out.head = true;
         if (res && res.killed) out.killed = true;
         if (acc && res) {
@@ -638,9 +1090,11 @@ export class Game {
           if (res.killed) e.killed = true;
         }
 
-        if (this.effects) this.effects.blood(hx, hy, hz, dir.x, dir.y, dir.z, head);
-        this._bloodOnWorld(hx, hy, hz, dir.x, dir.y, dir.z, dmg, head || (res && res.killed));
-        audio.flesh({ x: hx, y: hy, z: hz });
+        if (!quiet) {
+          if (this.effects) this.effects.blood(hx, hy, hz, dir.x, dir.y, dir.z, head);
+          this._bloodOnWorld(hx, hy, hz, dir.x, dir.y, dir.z, dmg, head || (res && res.killed));
+          audio.flesh({ x: hx, y: hy, z: hz });
+        }
 
         ignored.add(bestActor);
         travelled += bestT + 0.05;
@@ -652,8 +1106,11 @@ export class Game {
 
       if (wallHit) {
         out.x = wallHit.x; out.y = wallHit.y; out.z = wallHit.z;
-        if (this.effects) this.effects.impact(wallHit.x, wallHit.y, wallHit.z, wallHit.nx, wallHit.ny, wallHit.nz);
-        audio.impact({ x: wallHit.x, y: wallHit.y, z: wallHit.z });
+        if (!quiet) {
+          if (this.effects) this.effects.impact(wallHit.x, wallHit.y, wallHit.z, wallHit.nx, wallHit.ny, wallHit.nz);
+          audio.impact({ x: wallHit.x, y: wallHit.y, z: wallHit.z });
+        }
+        this._damageWorld(wallHit, w.damage * (w.pellets > 1 ? 1 : 1.5), shooter);
         this._whizzCheck(eye, dir, travelled + wallHit.t, shooter);
       } else {
         out.x = ox + dir.x * maxDist;
@@ -664,6 +1121,127 @@ export class Game {
       break;
     }
     return out;
+  }
+
+  // --------------------------------------------------------
+  // Zerstoerbare Objekte
+  // --------------------------------------------------------
+  /** Treffer an der Welt: Kisten, Faesser, Glas beschaedigen */
+  _damageWorld(hit, dmg, attacker) {
+    if (!hit || !hit.col || !hit.col.destr || !this.world) return false;
+    const c = hit.col;
+    if (!this.world.damageDestructible(c, dmg)) return false;
+    this._destroyed(c, attacker);
+    return true;
+  }
+
+  _destroyed(c, attacker) {
+    const d = c.destr;
+    const cx = (c.minx + c.maxx) / 2, cy = (c.miny + c.maxy) / 2, cz = (c.minz + c.maxz) / 2;
+    if (d.type === 'glass') {
+      const w = Math.max(d.w, d.d), nx = d.w < d.d ? 1 : 0, nz = nx ? 0 : 1;
+      if (this.effects) this.effects.glass(cx, cy, cz, nx, 0, nz, w, d.h);
+      audio.breakGlass({ x: cx, y: cy, z: cz });
+    } else if (d.type === 'barrel') {
+      if (this.effects) this.effects.splinters(cx, cy, cz, 0x6a2a20, 0.8);
+      audio.breakWood({ x: cx, y: cy, z: cz });
+      this.explode(cx, cy + 0.3, cz, BARREL_EX, attacker || null, null, null, 'barrel');
+    } else {
+      if (this.effects) this.effects.splinters(cx, cy, cz, d.color, d.w / 2.4);
+      audio.breakWood({ x: cx, y: cy, z: cz });
+    }
+  }
+
+  _updatePendingDestr(dt) {
+    for (let i = this.pendingDestr.length - 1; i >= 0; i--) {
+      const p = this.pendingDestr[i];
+      p.t -= dt;
+      if (p.t > 0) continue;
+      this.pendingDestr.splice(i, 1);
+      if (p.c.dead) continue;
+      if (this.world.damageDestructible(p.c, p.dmg)) this._destroyed(p.c, p.owner);
+    }
+  }
+
+  // --------------------------------------------------------
+  // Brandschaden
+  // --------------------------------------------------------
+  _updateBurning(dt) {
+    for (const a of this.actors) {
+      if (!a.alive || a.burnT <= 0) continue;
+      a.burnT -= dt;
+      a.burnTick -= dt;
+      if (a.burnTick <= 0) {
+        a.burnTick = 0.25;
+        const from = a.burnFrom && a.burnFrom.alive ? a.burnFrom : a.burnFrom;
+        this.damageActor(a, from && from !== a ? from : null, (a.burnDps || 8) * 0.25, 'flame', {
+          x: a.pos.x, y: a.pos.y + 1.4, z: a.pos.z, dirx: 0, diry: 0.4, dirz: 0, head: false, noPopup: !(a.burnTick === 0.25 && Math.random() < 0.5), strength: 4,
+        });
+        if (this.effects) this.effects.burn(a.pos.x, a.pos.y, a.pos.z);
+        if (Math.random() < 0.35) audio.burn({ x: a.pos.x, y: a.pos.y + 1, z: a.pos.z });
+      }
+      if (a.burnT <= 0) { a.burnT = 0; a.burnFrom = null; }
+    }
+  }
+
+  // --------------------------------------------------------
+  // Killstreaks
+  // --------------------------------------------------------
+  _onStreak(a) {
+    if (settings.killstreaks === false) return;
+    const reward = STREAK_REWARDS[a.streak];
+    if (!reward) return;
+    if (reward === 'uav') {
+      a.uavUntil = this.time + UAV_TIME;
+      if (a.isLocal) { this.hud.toast('UAV AKTIV · GEGNER AUF DEM RADAR'); audio.reward(3); }
+    } else if (reward === 'shield') {
+      a.shield = SHIELD_AMOUNT; a.shieldT = SHIELD_TIME;
+      if (a.isLocal) { this.hud.toast('SCHILD AKTIV · +' + SHIELD_AMOUNT); audio.reward(5); }
+    } else if (reward === 'airstrike') {
+      a.airstrikes++;
+      if (a.isLocal) { this.hud.toast('LUFTSCHLAG BEREIT · TASTE 4'); audio.reward(7); }
+    }
+    if (!a.isLocal && this.sameTeam(a, this.player)) this.hud.toast(a.name + ': ' + (reward === 'uav' ? 'UAV' : reward === 'shield' ? 'SCHILD' : 'LUFTSCHLAG'), true);
+  }
+
+  /** Luftschlag auf den Blickpunkt (Rueckgabe: ausgeloest?) */
+  callAirstrike(actor) {
+    const eye = actor.eyePos(this._v1);
+    const dir = actor.lookDir(this._v2);
+    const hit = this.world.raycast(eye.x, eye.y, eye.z, dir.x, dir.y, dir.z, 160);
+    let x, y, z;
+    if (hit) { x = hit.x; y = hit.y; z = hit.z; }
+    else { x = eye.x + dir.x * 60; z = eye.z + dir.z * 60; y = this.world.groundAt(x, z, 60); }
+    // Linie quer zur Blickrichtung
+    const l = Math.max(0.001, Math.hypot(dir.x, dir.z));
+    const px = -dir.z / l, pz = dir.x / l;
+    this.airstrikes.push({ x, y, z, px, pz, owner: actor, t: 1.8, next: 0, i: 0, jet: false });
+    if (actor.isLocal) this.hud.toast('LUFTSCHLAG ANGEFORDERT', true);
+    return true;
+  }
+
+  _updateAirstrikes(dt) {
+    for (let i = this.airstrikes.length - 1; i >= 0; i--) {
+      const s = this.airstrikes[i];
+      s.t -= dt;
+      if (s.t > 0) {
+        s.next -= dt;
+        if (s.next <= 0 && this.effects) { s.next = 0.12; this.effects.markSmoke(s.x, s.y, s.z); }
+        if (!s.jet && s.t < 1.1) { s.jet = true; audio.jet({ x: s.x, y: s.y + 30, z: s.z }); }
+        continue;
+      }
+      // Sechs Einschlaege entlang der Linie, 0.1 s Abstand
+      s.next -= dt;
+      if (s.next <= 0) {
+        s.next = 0.1;
+        const k = s.i - 2.5;
+        const ex = s.x + s.px * k * 4.5, ez = s.z + s.pz * k * 4.5;
+        const ey = this.world.groundAt(ex, ez, s.y + 30) + 0.6;
+        this.explode(ex, ey, ez, AIRSTRIKE_EX, s.owner, null, null, 'airstrike');
+        s.i++;
+        if (s.i >= 6) this.airstrikes.splice(i, 1);
+      }
+    }
   }
 
   _whizzCheck(eye, dir, dist, shooter) {
@@ -742,6 +1320,30 @@ export class Game {
       }
     }
 
+    // Kisten / Faesser / Glas mit dem Nahkampf
+    if (!hit) {
+      const dir = actor.lookDir(this._v2);
+      const wh = this.world.raycast(eye.x, eye.y, eye.z, dir.x, dir.y, dir.z, range + 0.3);
+      if (wh && wh.col && wh.col.destr) {
+        this._damageWorld(wh, heavy ? 90 : 45, actor);
+        if (this.effects) this.effects.impact(wh.x, wh.y, wh.z, wh.nx, wh.ny, wh.nz);
+        if (actor.isLocal) this.viewmodel.hitKick(heavy);
+      }
+    }
+
+    // Trainings-Zielscheiben auch mit Nahkampf
+    if (!hit && this.training && actor.isLocal) {
+      const dir = actor.lookDir(this._v2);
+      const th = this.training.rayHit(eye.x, eye.y, eye.z, dir.x, dir.y, dir.z, range + 0.5);
+      if (th) {
+        this.training.hit(th.target, eye.x + dir.x * th.t, eye.y + dir.y * th.t, eye.z + dir.z * th.t);
+        this.hud.hitmarker('hit');
+        audio.hitmarker(false, false, th.t);
+        this.viewmodel.hitKick(heavy);
+        this._hitTint = 0.16;
+      }
+    }
+
     if (hit) {
       const dir = actor.lookDir(this._v2);
       const fx = -Math.sin(hit.yaw), fz = -Math.cos(hit.yaw);
@@ -802,32 +1404,40 @@ export class Game {
   // --------------------------------------------------------
   // Projektile
   // --------------------------------------------------------
-  spawnProjectile(actor, weapon, origin, dir, def) {
+  spawnProjectile(actor, weapon, origin, dir, def, power) {
     if (!this._projGeo) this._projGeo = new Map();
     let geo = this._projGeo.get(weapon.id);
     if (!geo) {
-      geo = new THREE.BoxGeometry(def.radius * 2, def.radius * 2, def.radius * 3);
+      if (def.arrow) geo = new THREE.BoxGeometry(0.05, 0.05, 1.0);
+      else if (def.knife) geo = new THREE.BoxGeometry(0.06, 0.16, 0.5);
+      else geo = new THREE.BoxGeometry(def.radius * 2, def.radius * 2, def.radius * 3);
       this._projGeo.set(weapon.id, geo);
     }
     const c = new THREE.Color(def.color);
     if (def.glow) c.multiplyScalar(2.5);
-    const mat = new THREE.MeshBasicMaterial({ color: c, toneMapped: false });
+    const mat = def.knife || def.arrow
+      ? new THREE.MeshStandardMaterial({ color: c, roughness: 0.35, metalness: def.knife ? 0.9 : 0.2 })
+      : new THREE.MeshBasicMaterial({ color: c, toneMapped: false });
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.copy(origin);
     this.scene.add(mesh);
 
     const spread = actor.currentSpread();
     const d = this._spreadDir(dir, spread, this._v4);
+    const pw = power === undefined ? 1 : power;
+    const speed = def.speed * (weapon.charge ? lerp(0.5, 1, pw) : 1);
 
     this.projectiles.push({
       x: origin.x, y: origin.y, z: origin.z,
-      vx: d.x * def.speed + actor.vel.x * 0.25,
-      vy: d.y * def.speed + actor.vel.y * 0.25,
-      vz: d.z * def.speed + actor.vel.z * 0.25,
+      vx: d.x * speed + actor.vel.x * 0.25,
+      vy: d.y * speed + actor.vel.y * 0.25,
+      vz: d.z * speed + actor.vel.z * 0.25,
       def, weapon, owner: actor, mesh,
       life: def.fuse !== undefined ? def.fuse : 6,
       trailT: 0,
       isGrenade: def.fuse !== undefined,
+      dmgMult: weapon.charge ? lerp(0.35, 1, pw) : 1,
+      spin: def.knife ? 0 : null,
     });
   }
 
@@ -878,6 +1488,18 @@ export class Game {
 
           const wall = this.world.raycast(p.x, p.y, p.z, ux, uy, uz, len);
 
+          // Trainings-Zielscheiben (Raketen, Blaster-Bolzen)
+          if (this.training && p.owner && p.owner.isLocal && !p.isGrenade) {
+            const th = this.training.rayHit(p.x, p.y, p.z, ux, uy, uz, wall ? Math.min(wall.t, len) : len);
+            if (th && (!hitActor || th.t < hitT)) {
+              const hx = p.x + ux * th.t, hy = p.y + uy * th.t, hz = p.z + uz * th.t;
+              this.training.hit(th.target, hx, hy, hz);
+              this._projectileHit(p, hx, hy, hz, ux, uy, uz, null, null);
+              exploded = true;
+              break;
+            }
+          }
+
           if (hitActor && (!wall || hitT < wall.t)) {
             const hx = p.x + ux * hitT, hy = p.y + uy * hitT, hz = p.z + uz * hitT;
             if (p.isGrenade) {
@@ -892,6 +1514,7 @@ export class Game {
 
           if (wall) {
             const hx = p.x + ux * wall.t, hy = p.y + uy * wall.t, hz = p.z + uz * wall.t;
+            if (wall.col && wall.col.destr && !def.explode) this._damageWorld(wall, p.weapon.damage * (p.dmgMult || 1), p.owner);
             if (def.bounce) {
               const dot = p.vx * wall.nx + p.vy * wall.ny + p.vz * wall.nz;
               p.vx = (p.vx - 2 * dot * wall.nx) * def.bounce;
@@ -914,7 +1537,7 @@ export class Game {
       if (exploded) { this._removeProjectile(i); continue; }
 
       p.trailT -= dt;
-      if (p.trailT <= 0 && this.effects) {
+      if (p.trailT <= 0 && this.effects && !def.noTrail) {
         p.trailT = 0.016;
         this.effects.trail(p.x, p.y, p.z, def.glow ? def.color : 0x9a9a9a);
       }
@@ -924,6 +1547,7 @@ export class Game {
         const sp = Math.hypot(p.vx, p.vy, p.vz);
         if (sp > 0.01) p.mesh.lookAt(p.x + p.vx / sp, p.y + p.vy / sp, p.z + p.vz / sp);
         if (p.isGrenade) p.mesh.rotation.x += dt * 9;
+        if (p.spin !== null && p.spin !== undefined) { p.spin += dt * 18; p.mesh.rotateX(p.spin * 0.05); }
       }
 
       if (p.life <= 0) {
@@ -947,18 +1571,29 @@ export class Game {
     if (directActor && !def.explode) {
       const head = zone === 'head';
       const w = p.weapon;
-      this.damageActor(directActor, p.owner, w.damage * (head ? w.headMult : 1), w.id, {
-        x, y, z, dirx: ux, diry: uy, dirz: uz, head,
+      const dmg = w.damage * (head ? w.headMult : 1) * (p.dmgMult || 1);
+      const res = this.damageActor(directActor, p.owner, dmg, w.id, {
+        x, y, z, dirx: ux, diry: uy, dirz: uz, head, strength: def.arrow ? 9 : 7,
       });
+      if (this.effects) this.effects.blood(x, y, z, ux, uy, uz, head);
+      this._bloodOnWorld(x, y, z, ux, uy, uz, dmg, head || (res && res.killed));
+      audio.flesh({ x, y, z });
+      if (p.owner && p.owner.isLocal) {
+        this.hud.hitmarker(res && res.killed ? 'kill' : head ? 'head' : 'hit');
+        audio.hitmarker(head, res && res.killed, Math.hypot(x - p.owner.pos.x, z - p.owner.pos.z));
+        this._hitTint = 0.14;
+      }
     }
     if (def.explode) {
       this.explode(x, y, z, def.explode, p.owner, p.weapon, directActor);
     } else if (this.effects) {
       this.effects.impact(x, y, z, -ux, -uy, -uz, def.color);
+      if (!directActor && (def.knife || def.arrow)) audio.impact({ x, y, z }, true);
     }
   }
 
-  explode(x, y, z, ex, owner, weapon, directActor) {
+  /** ex: {radius, damage, minMult, force, selfMult}; cause: Waffen-Id fuer den Killfeed */
+  explode(x, y, z, ex, owner, weapon, directActor, cause) {
     if (this.effects) this.effects.explosion(x, y, z, ex.radius * 0.55);
     audio.explosion({ x, y, z });
     this.muzzleLight.position.set(x, y + 0.5, z);
@@ -974,8 +1609,8 @@ export class Game {
       if (dist > 1.2 && !this.world.losClear(x, y, z, cx, cy, cz)) continue;
 
       const isSelf = a === owner;
-      const isFriend = this.sameTeam(a, owner) && !isSelf;
-      if (isFriend) continue;
+      const isFriend = owner && this.sameTeam(a, owner) && !isSelf;
+      if (isFriend && cause !== 'barrel') continue;
 
       const f = clamp(1 - dist / ex.radius, 0, 1);
       let dmg = ex.damage * lerp(ex.minMult, 1, f * f);
@@ -990,10 +1625,20 @@ export class Game {
       a.grounded = false;
       a.coyote = 0;
 
-      this.damageActor(a, owner, dmg, weapon ? weapon.id : 'explosion', {
+      // Fass-Explosionen treffen auch Teamkollegen des Schuetzen (ohne Gutschrift)
+      const attacker = isFriend ? null : owner;
+      this.damageActor(a, attacker, dmg, cause || (weapon ? weapon.id : 'explosion'), {
         x: cx, y: cy, z: cz, dirx: (cx - x) / l, diry: (cy - y) / l, dirz: (cz - z) / l, head: false,
         strength: 8 + push * 0.6,
       });
+    }
+
+    // Kettenreaktion: Faesser und Kisten im Umkreis (leicht verzoegert)
+    const near = this.world.destructiblesNear(x, y, z, ex.radius * 0.85, this._destrList);
+    for (let i = 0; i < near.length; i++) {
+      const c = near[i];
+      if (this.pendingDestr.some(p => p.c === c)) continue;
+      this.pendingDestr.push({ c, dmg: 250, t: 0.1 + rand(0, 0.2), owner });
     }
 
     if (this.player && this.player.alive) {
@@ -1053,6 +1698,25 @@ export class Game {
     return { killed: died, damage: actualDmg };
   }
 
+  /** Tod sichtbar machen: Kill-Effekt, Ragdoll oder Umkippen */
+  _applyDeathVisual(victim, info) {
+    const m = victim.model;
+    if (!m) return;
+    if (info.fx) {
+      if (this.effects) this.effects.killEffect(info.fx, info.s.x, info.s.y, info.s.z, info.bodyColor);
+      audio.killEffect(info.fx, { x: info.s.x, y: info.s.y + 1.3, z: info.s.z });
+    }
+    if (info.hideBody) {
+      // Koerper "explodiert": kein Ragdoll, sofort unsichtbar
+      m.startDeath(info.hit.dirx, info.hit.dirz);
+      m.deathT = 99;
+      m.setVisible(false);
+      return;
+    }
+    if (settings.ragdolls) m.startRagdoll(info.s, info.hit);
+    else m.startDeath(info.hit.dirx, info.hit.dirz);
+  }
+
   /** Ragdoll-Startdaten fuer das Modell */
   _ragdollInfo(victim, hit) {
     return {
@@ -1069,39 +1733,67 @@ export class Game {
     victim.intent.fire = false;
     victim.sliding = false;
     victim.wallrun = null;
+    victim.burnT = 0;
+    victim.chargeT = 0;
+    victim.spinT = 0;
+    if (victim.grapple) victim._releaseGrapple(false);
+    if (victim.zip) victim._detachZip(false);
     if (victim.onDeath) victim.onDeath(attacker);
+    if (this.modeCtl) this.modeCtl.onDeath(victim, attacker);
+    this._dropWeapon(victim);
 
     const suicide = !attacker || attacker === victim;
     let killcam = false;
     if (victim.isLocal && !suicide && settings.killcam) killcam = this.startKillcam(attacker);
     victim.respawnTimer = victim.isLocal ? (killcam ? KILLCAM_LEN + 0.9 : 3.2) : rand(2.2, 4.5);
+    const noRespawn = this.modeCtl && this.modeCtl.blocksRespawn && this.modeCtl.blocksRespawn(victim);
+    if (noRespawn) victim.respawnTimer = 99999;
+
+    // Bot-Chat: Spieler getoetet / vom Spieler getoetet / Kopfschuss
+    if (!suicide) {
+      if (attacker.isBot && victim.isLocal) this.botChat(attacker, hit && hit.head ? 'headshot' : 'kill');
+      else if (victim.isBot && attacker.isLocal) this.botChat(victim, 'killed');
+      else if (attacker.isBot && attacker.streak === 5) this.botChat(attacker, 'streak');
+    }
+
+    // Kill-Effekt des Killers (Konfetti, Feuerwerk ...) am Opfer
+    const fx = (!suicide && settings.killEffects !== false) ? KILL_EFFECT_BY_ID[attacker.killEffect] : null;
+    const fxKind = fx && fx.id !== 'none' ? fx.id : null;
+    const bodyColor = victim.model ? this._figureColors(victim).body : 0x4a86d9;
 
     if (victim.model) {
       const info = this._ragdollInfo(victim, hit);
+      info.fx = fxKind; info.hideBody = !!(fx && fx.hideBody); info.bodyColor = bodyColor;
       if (killcam) this.killcam.pendingRagdoll = info;      // erst nach dem Replay umfallen
-      else if (settings.ragdolls) victim.model.startRagdoll(info.s, info.hit);
-      else victim.model.startDeath(info.hit.dirx, info.hit.dirz);
+      else this._applyDeathVisual(victim, info);
     }
     audio.death({ x: victim.pos.x, y: victim.pos.y + 1.4, z: victim.pos.z });
     if (hit) this._bloodOnWorld(hit.x, hit.y, hit.z, hit.dirx, hit.diry, hit.dirz, 90, true);
 
     const w = WEAPONS[causeId];
     const wName = w ? w.short : causeId === 'fall' ? 'STURZ' : causeId === 'void' ? 'ABGRUND'
-                 : causeId === 'melee' ? 'MELEE' : 'EXPLOSION';
+                 : causeId === 'melee' ? 'MELEE' : causeId === 'airstrike' ? 'LUFTSCHLAG'
+                 : causeId === 'barrel' ? 'FASS' : 'EXPLOSION';
+    const icon = !suicide && KILL_ICON_BY_ID[attacker.killIcon] ? KILL_ICON_BY_ID[attacker.killIcon].icon : '';
 
+    let ggWin = false;
     if (!suicide) {
       attacker.kills++;
       attacker.streak++;
       attacker.bestStreak = Math.max(attacker.bestStreak, attacker.streak);
-      attacker.score += 100 + (hit && hit.head ? 50 : 0);
-      if (this.mode !== 'ffa') this.scores[attacker.team]++;
+      attacker.score += 100 + (hit && hit.head ? 50 : 0) + (victim.carrying ? 50 : 0);
+      if (this.teamMode && this.mode === 'tdm') this.scores[attacker.team]++;
+      this._onStreak(attacker);
+      if (this.modeCtl && this.modeCtl.id === 'gungame') ggWin = this.modeCtl.onKill(victim, attacker, causeId);
+      else if (this.modeCtl && this.modeCtl.onKill) this.modeCtl.onKill(victim, attacker, causeId);
 
       if (attacker.isLocal) {
         this.hud.hitmarker('kill');
         audio.kill();
         const name = STREAK_NAMES[attacker.streak];
-        if (name) this.hud.toast(name);
-        else if (hit && hit.head) this.hud.toast('KOPFSCHUSS', true);
+        if (name) this.hud.toast((icon ? icon + ' ' : '') + name);
+        else if (hit && hit.head) this.hud.toast((icon ? icon + ' ' : '') + 'KOPFSCHUSS', true);
+        else if (icon) this.hud.toast(icon + ' ELIMINIERT', true);
         this.hud.toast('+' + (100 + (hit && hit.head ? 50 : 0)) + ' Punkte', true);
       }
       if (victim.isLocal) {
@@ -1109,34 +1801,42 @@ export class Game {
       }
     } else {
       victim.score = Math.max(0, victim.score - 50);
-      if (this.mode !== 'ffa') this.scores[victim.team] = Math.max(0, this.scores[victim.team] - 1);
+      if (this.teamMode && this.mode === 'tdm') this.scores[victim.team] = Math.max(0, this.scores[victim.team] - 1);
       if (victim.isLocal) this._deathInfo = { name: null, weapon: wName, hp: null };
     }
 
     const isMe = victim.isLocal ? 'victim' : (attacker && attacker.isLocal ? 'killer' : null);
     this.hud.addKillfeed(
       suicide ? '' : attacker.name, suicide ? '' : attacker.team,
-      victim.name, victim.team, wName, hit ? hit.head : false, isMe, suicide
+      victim.name, victim.team, wName, hit ? hit.head : false, isMe, suicide, icon
     );
 
     if (victim.isLocal) {
-      this.hud.showDeath(this._deathInfo.name, this._deathInfo.weapon, this._deathInfo.hp, victim.respawnTimer);
+      this.hud.showDeath(this._deathInfo.name, this._deathInfo.weapon, this._deathInfo.hp, noRespawn ? Infinity : victim.respawnTimer);
       if (!killcam) { this.viewmodel.setHidden(true); this.hud.setScope(false); }
     }
 
+    if (ggWin) { this.endMatch(attacker); return; }
     this._checkMatchEnd();
   }
 
   _checkMatchEnd() {
     if (this.over) return;
-    if (this.mode === 'ffa') {
+    if (this.mode === 'training') return;
+    if (this.mode === 'gungame') return;          // wird ueber den letzten Kill entschieden
+    if (!this.teamMode) {
       for (const a of this.actors) {
         if (a.kills >= this.scoreLimit) { this.endMatch(a); return; }
       }
-    } else {
-      if (this.scores.red >= this.scoreLimit) { this.endMatch('red'); return; }
-      if (this.scores.blue >= this.scoreLimit) { this.endMatch('blue'); return; }
+      return;
     }
+    if (this.modeCtl && this.modeCtl.winner) {
+      const w = this.modeCtl.winner();
+      if (w) { this.endMatch(w); return; }
+      return;
+    }
+    if (this.scores.red >= this.scoreLimit) { this.endMatch('red'); return; }
+    if (this.scores.blue >= this.scoreLimit) { this.endMatch('blue'); return; }
   }
 
   endMatch(winner) {
@@ -1149,14 +1849,20 @@ export class Game {
     this.input.exitLock();
 
     let won = false;
-    if (this.mode === 'ffa') {
-      const sorted = this.actors.slice().sort((a, b) => b.kills - a.kills || b.score - a.score);
-      won = sorted[0] === this.player;
-      winner = sorted[0];
+    if (!this.teamMode) {
+      if (winner && typeof winner === 'object') {
+        won = winner === this.player;
+      } else {
+        const sorted = this.actors.slice().sort((a, b) => (this.mode === 'gungame' ? b.ggLevel - a.ggLevel : 0) || b.kills - a.kills || b.score - a.score);
+        won = sorted[0] === this.player;
+        winner = sorted[0];
+      }
     } else {
       won = winner === this.player.team;
     }
     if (won) audio.win(); else audio.lose();
+    const talker = this.actors.find(a => a.isBot);
+    if (talker) { this._chatGlobalT = -9; talker._chatT = -99; this.botChat(talker, won ? 'lose' : 'win'); }
     if (this.onMatchEnd) this.onMatchEnd(winner, won);
   }
 
@@ -1213,10 +1919,9 @@ export class Game {
     const kc = this.killcam;
     this.killcam = null;
     this.hud.setKillcam(null);
-    for (const a of this.actors) if (a.model && a.alive) a.model.setWeapon(a.weapon, this.skinFor(a));
+    for (const a of this.actors) if (a.model && a.alive) a.model.setWeapon(a.weapon, this.skinFor(a), this.stickerFor(a));
     if (kc.pendingRagdoll && this.player.model && !this.player.alive) {
-      if (settings.ragdolls) this.player.model.startRagdoll(kc.pendingRagdoll.s, kc.pendingRagdoll.hit);
-      else this.player.model.startDeath(kc.pendingRagdoll.hit.dirx, kc.pendingRagdoll.hit.dirz);
+      this._applyDeathVisual(this.player, kc.pendingRagdoll);
     }
   }
 
@@ -1276,7 +1981,9 @@ export class Game {
     if (kc.wid !== ks.wid) {
       kc.wid = ks.wid;
       const w = WEAPONS[ks.wid] || kc.killer.weapon;
-      this.viewmodel.setWeapon(w, kc.killer.skin, this.skinFor(kc.killer, w));
+      const kc2 = this._figureColors(kc.killer);
+      this.viewmodel.setOutfit(kc2.sleeve, kc2.cuff);
+      this.viewmodel.setWeapon(w, kc.killer.skin, this.skinFor(kc.killer, w), this.stickerFor(kc.killer, w));
       this.viewmodel.setHidden(false);
     }
     this.viewmodel.update(dt, {
@@ -1287,12 +1994,193 @@ export class Game {
     if (frozen && !kc.frozen) {
       kc.frozen = true;
       if (kc.pendingRagdoll && this.player.model) {
-        if (settings.ragdolls) this.player.model.startRagdoll(kc.pendingRagdoll.s, kc.pendingRagdoll.hit);
-        else this.player.model.startDeath(kc.pendingRagdoll.hit.dirx, kc.pendingRagdoll.hit.dirz);
+        this._applyDeathVisual(this.player, kc.pendingRagdoll);
         kc.pendingRagdoll = null;
       }
     }
     return frozen;
+  }
+
+  // --------------------------------------------------------
+  // Replay: Aufzeichnung des ganzen Matches + Wiedergabe mit freier Kamera
+  // --------------------------------------------------------
+  _recordReplay() {
+    const r = this.rec;
+    if (!r || this.time - r.lastT < r.rate) return;
+    if (r.frames.length > 30000) return;             // ~25 Minuten
+    r.lastT = this.time;
+    const s = [];
+    const wids = r.meta.weaponIds;
+    for (const a of this.actors) {
+      const flags = (a.alive ? 1 : 0) | ((a.crouching || a.sliding) ? 2 : 0) | (a.grounded ? 4 : 0) |
+                    ((this.time - (a.lastShotTime !== undefined ? a.lastShotTime : -9)) < r.rate + 1e-4 ? 8 : 0) | (a.zip ? 16 : 0);
+      s.push(Math.round(a.pos.x * 100) / 100, Math.round(a.pos.y * 100) / 100, Math.round(a.pos.z * 100) / 100,
+        Math.round(a.yaw * 1000) / 1000, Math.round(a.pitch * 1000) / 1000, flags, Math.max(0, wids.indexOf(a.weapon.id)),
+        Math.round(Math.hypot(a.vel.x, a.vel.z) * 10) / 10);
+    }
+    r.frames.push([Math.round(this.time * 1000) / 1000].concat(s));
+  }
+
+  /** Aufzeichnung als serialisierbares Objekt (nach dem Match) */
+  getReplayData() {
+    if (!this.rec || this.rec.frames.length < 10) return null;
+    return { v: 1, meta: this.rec.meta, frames: this.rec.frames };
+  }
+
+  /** Wiedergabe starten: Welt aus dem Replay bauen, Geister-Akteure, freie Kamera */
+  startReplay(data) {
+    if (!data || !data.meta || !data.frames || data.frames.length < 2) return false;
+    this.cleanup();
+    const meta = data.meta;
+    this.replaying = true;
+    this.mode = meta.mode || 'tdm';
+    this.teamMode = !!(MODE_BY_ID[this.mode] && MODE_BY_ID[this.mode].team);
+    const wx = applyWeather(buildMap(meta.map || 'sandstorm'), meta.weather || 'clear');
+    this.weather = wx;
+    this.world = new World(this.scene, wx.map, this.renderer);
+    this.vmScene.environment = this.scene.environment;
+    this.jumpPads = [];
+    this._applyFog();
+    this._setupLights(wx.map);
+    this._setupWeather(wx);
+    this._buildZiplines(wx.map);
+    this.effects = new Effects(this.scene);
+    this.effects.setRain(!!wx.rain);
+    audio.rain(!!wx.rain);
+    this.pickups = [];
+    this.actors = [];
+    for (const m of meta.actors) {
+      const a = new Actor(this, { name: m.name, team: m.team, classId: m.classId });
+      a.outfit = m.outfit; a.hat = m.hat; a.skin = m.skin; a.hair = m.hair;
+      a.skins = m.skins || {}; a.stickers = m.stickers || {};
+      a.alive = true;
+      a.replayLocal = !!m.isLocal;
+      a.model = this._makeModel(a);
+      this.actors.push(a);
+    }
+    this.player = this.actors.find(a => a.replayLocal) || this.actors[0];
+    this._applyTeamCss();
+    const wids = meta.weaponIds || Object.keys(WEAPONS);
+    const n = this.actors.length;
+    const f0 = data.frames[0];
+    const cur = [];
+    for (let i = 0; i < n; i++) cur.push({ x: 0, y: 0, z: 0, yaw: 0, pitch: 0, alive: true, crouch: false, wid: 'ar', speed: 0, grounded: true, zip: false, shot: false });
+    const px = f0[1 + 0 * 8], py = f0[2 + 0 * 8], pz = f0[3 + 0 * 8];
+    const li = this.actors.indexOf(this.player);
+    const lx = f0[1 + li * 8], ly = f0[2 + li * 8], lz = f0[3 + li * 8], lyaw = f0[4 + li * 8];
+    this.replay = {
+      data, wids, n, t: 0, total: data.frames[data.frames.length - 1][0] - f0[0], t0: f0[0],
+      speed: 1, paused: false, fi: 0, lastFrame: -1, cur,
+      cam: { x: lx + Math.sin(lyaw) * 6, y: ly + 4, z: lz + Math.cos(lyaw) * 6, yaw: lyaw, pitch: -0.3 },
+    };
+    void px; void py; void pz;
+    this.viewmodel.setHidden(true);
+    this.hud.show(false);
+    this.hud.showReplay(true);
+    this.running = false;
+    this.camera.fov = settings.fov;
+    this.camera.updateProjectionMatrix();
+    return true;
+  }
+
+  stopReplay() {
+    if (!this.replaying) return;
+    this.replaying = false;
+    this.replay = null;
+    this.hud.showReplay(false);
+    this.cleanup();
+  }
+
+  /** Wiedergabe: Steuerung (Pause, Suchen, Tempo, Flugkamera) und Zustand fuer die Modelle */
+  replayUpdate(dt, input) {
+    const r = this.replay;
+    if (!r) return;
+    // ---- Steuerung ----
+    if (input.justDown('Space')) r.paused = !r.paused;
+    if (input.justDown('ArrowLeft')) this._replaySeek(r.t - 5);
+    if (input.justDown('ArrowRight')) this._replaySeek(r.t + 5);
+    if (input.justDown('Digit1')) r.speed = 0.25;
+    if (input.justDown('Digit2')) r.speed = 0.5;
+    if (input.justDown('Digit3')) r.speed = 1;
+    if (input.justDown('Digit4')) r.speed = 2;
+    if (input.justDown('KeyR')) this._replaySeek(0);
+    const sens = settings.sens * 0.0022;
+    r.cam.yaw -= input.dx * sens;
+    r.cam.pitch = clamp(r.cam.pitch - input.dy * (settings.invertY ? -1 : 1) * sens, -1.5, 1.5);
+    input.dx = 0; input.dy = 0;
+    const tm = input.touchMove;
+    const f = (input.down('KeyW') ? 1 : 0) - (input.down('KeyS') ? 1 : 0) + (tm ? tm.y : 0);
+    const s = (input.down('KeyD') ? 1 : 0) - (input.down('KeyA') ? 1 : 0) + (tm ? tm.x : 0);
+    const up = (input.down('KeyE') || input.down('Space') && false ? 1 : 0) - (input.down('KeyC') || input.down('ControlLeft') ? 1 : 0) + (input.down('KeyQ') ? 1 : 0);
+    const spd = (input.down('ShiftLeft') || input.down('ShiftRight') ? 46 : 16) * dt;
+    const cp = Math.cos(r.cam.pitch);
+    const fx = -Math.sin(r.cam.yaw) * cp, fy = Math.sin(r.cam.pitch), fz = -Math.cos(r.cam.yaw) * cp;
+    const rx = Math.cos(r.cam.yaw), rz = -Math.sin(r.cam.yaw);
+    r.cam.x += (fx * f + rx * s) * spd; r.cam.y += (fy * f + up) * spd; r.cam.z += (fz * f + rz * s) * spd;
+
+    // ---- Zeit ----
+    if (!r.paused) r.t = Math.min(r.total, r.t + dt * r.speed);
+    const tr = r.t0 + r.t;
+    const fr = r.data.frames;
+    let i = r.fi;
+    while (i < fr.length - 2 && fr[i + 1][0] <= tr) i++;
+    r.fi = i;
+    const a = fr[i], b = fr[Math.min(i + 1, fr.length - 1)];
+    const k = b[0] > a[0] ? clamp((tr - a[0]) / (b[0] - a[0]), 0, 1) : 1;
+    for (let j = 0; j < r.n; j++) {
+      const o = 1 + j * 8;
+      const c = r.cur[j];
+      c.x = lerp(a[o], b[o], k); c.y = lerp(a[o + 1], b[o + 1], k); c.z = lerp(a[o + 2], b[o + 2], k);
+      c.yaw = angleLerp(a[o + 3], b[o + 3], k); c.pitch = lerp(a[o + 4], b[o + 4], k);
+      const flags = k < 0.5 ? a[o + 5] : b[o + 5];
+      c.alive = !!(flags & 1); c.crouch = !!(flags & 2); c.grounded = !!(flags & 4); c.zip = !!(flags & 16);
+      c.wid = r.wids[a[o + 6]] || 'ar';
+      c.speed = lerp(a[o + 7], b[o + 7], k);
+    }
+    // Schuesse der uebersprungenen Frames (nur vorwaerts)
+    if (!r.paused && r.speed <= 2) {
+      for (let j = r.lastFrame + 1; j <= i; j++) {
+        const fjs = fr[j];
+        for (let n2 = 0; n2 < r.n; n2++) {
+          if (!(fjs[1 + n2 * 8 + 5] & 8)) continue;
+          const act = this.actors[n2];
+          const w = WEAPONS[r.wids[fjs[1 + n2 * 8 + 6]]] || WEAPONS.ar;
+          if (!act || !act.model || w.melee) continue;
+          act.model.getMuzzleWorld(this._v3);
+          audio.shot({ x: fjs[1 + n2 * 8], y: fjs[2 + n2 * 8] + 1.6, z: fjs[3 + n2 * 8] }, w.sound);
+          if (this.effects && !w.suppressed) {
+            const yaw = fjs[4 + n2 * 8], pitch = fjs[5 + n2 * 8], cpp = Math.cos(pitch);
+            this.effects.muzzleFlash(this._v3.x, this._v3.y, this._v3.z, -Math.sin(yaw) * cpp, Math.sin(pitch), -Math.cos(yaw) * cpp, 0.7);
+          }
+        }
+      }
+    }
+    r.lastFrame = i;
+
+    // ---- Kamera + Modelle ----
+    this.camera.position.set(r.cam.x, r.cam.y, r.cam.z);
+    this.camera.rotation.order = 'YXZ';
+    this.camera.rotation.set(r.cam.pitch, r.cam.yaw, 0);
+    this.camera.updateMatrixWorld();
+    this._updateModels(r.paused ? 0.0001 : dt, r.cur, { hideIdx: -1, deadFromState: true });
+    if (this.effects) this.effects.update(dt, this.camera);
+    this._updateWeather(dt);
+    const fwd = this._v1.set(0, 0, -1).applyQuaternion(this.camera.quaternion);
+    const right = this._v2.set(1, 0, 0).applyQuaternion(this.camera.quaternion);
+    audio.setListener(this.camera.position, fwd, right);
+    this.hud.updateReplay(r.t, r.total, r.speed, r.paused);
+  }
+
+  _replaySeek(t) {
+    const r = this.replay;
+    r.t = clamp(t, 0, r.total);
+    r.fi = 0;
+    r.lastFrame = 1e9;   // keine Schuesse beim Springen
+    // lastFrame wird beim naechsten Update korrekt gesetzt, wenn i >= 0
+    const tr = r.t0 + r.t;
+    let i = 0;
+    while (i < r.data.frames.length - 2 && r.data.frames[i + 1][0] <= tr) i++;
+    r.fi = i; r.lastFrame = i;
   }
 
   // --------------------------------------------------------
@@ -1377,11 +2265,29 @@ export class Game {
   onWallrunStart(a) {
     audio.wallrun(a.isLocal ? null : { x: a.pos.x, y: a.pos.y + 1, z: a.pos.z });
   }
+  onGrappleStart(a) {
+    const pos = a.isLocal ? null : { x: a.pos.x, y: a.pos.y + 1.5, z: a.pos.z };
+    audio.grapple(pos, 'shoot');
+    setTimeout(() => { if (this.running && a.grapple) audio.grapple(a.isLocal ? null : { x: a.grapple.x, y: a.grapple.y, z: a.grapple.z }, 'hit'); }, 90);
+    if (a.isLocal) { this.viewmodel.dash(); a.addShake(0.08); }
+  }
+  onGrappleEnd(a) { audio.grapple(a.isLocal ? null : { x: a.pos.x, y: a.pos.y + 1.5, z: a.pos.z }, 'retract'); }
+  onGrappleMiss(a) { audio.grapple(a.isLocal ? null : { x: a.pos.x, y: a.pos.y + 1.5, z: a.pos.z }, 'miss'); }
+  onZipStart(a) { audio.zip(a.isLocal ? null : { x: a.pos.x, y: a.pos.y + 2, z: a.pos.z }, 'start'); if (a.isLocal) this._zipSoundT = 0; }
+  onZipEnd(a) { audio.zip(a.isLocal ? null : { x: a.pos.x, y: a.pos.y + 2, z: a.pos.z }, 'end'); }
   onJumpPad(a) {
     audio.tone(420, 0.2, 0.3, 'sine', null, 1200);
     if (this.effects) this.effects.spawnFlash(a.pos.x, a.pos.y, a.pos.z, 0x2ee6a8);
   }
   onDryFire(a) { audio.click(a.isLocal ? null : { x: a.pos.x, y: a.pos.y + 1.5, z: a.pos.z }, 1600, 0.2, 0.04); }
+  /** Minigun laeuft an / aus (k = 0..1) */
+  onSpin(a, k, up) {
+    const last = this._spinSoundT.get(a) || -1;
+    if (this.time - last < 0.09) return;
+    this._spinSoundT.set(a, this.time);
+    audio.spin(a.isLocal ? null : { x: a.pos.x, y: a.pos.y + 1.4, z: a.pos.z }, k, up);
+  }
+  onChargeStart(a) { audio.bowDraw(a.isLocal ? null : { x: a.pos.x, y: a.pos.y + 1.4, z: a.pos.z }); }
   onReloadStart(a) {
     if (a.isLocal) this.viewmodel.startReload(a.reloadTotal);
     const pos = a.isLocal ? null : { x: a.pos.x, y: a.pos.y + 1.4, z: a.pos.z };
@@ -1395,8 +2301,8 @@ export class Game {
   onReloadEnd(a) { audio.reloadStep(a.isLocal ? null : { x: a.pos.x, y: a.pos.y + 1.4, z: a.pos.z }, 1); }
   onReloadCancel(a) { if (a.isLocal) this.viewmodel.cancelReload(); }
   onWeaponSwitch(a) {
-    if (a.isLocal && !this.killcam) { this.viewmodel.setWeapon(a.weapon, a.skin, this.skinFor(a)); this.viewmodel.setHidden(false); }
-    if (a.model && !this.killcam) a.model.setWeapon(a.weapon, this.skinFor(a));
+    if (a.isLocal && !this.killcam) { this.viewmodel.setWeapon(a.weapon, a.skin, this.skinFor(a), this.stickerFor(a)); this.viewmodel.setHidden(false); }
+    if (a.model && !this.killcam) a.model.setWeapon(a.weapon, this.skinFor(a), this.stickerFor(a));
     audio.draw(a.isLocal ? null : { x: a.pos.x, y: a.pos.y + 1.4, z: a.pos.z }, a.weapon.hold);
     if (a.isBot) a._updatePreferredRange();
   }
@@ -1413,9 +2319,10 @@ export class Game {
     if (!this.running || !this.world) return;
     this.time += dt;
 
+    const blocks = (a) => this.modeCtl && this.modeCtl.blocksRespawn && this.modeCtl.blocksRespawn(a);
     if (this.player.alive) {
       this.player.update(dt, this.world);
-    } else {
+    } else if (!blocks(this.player)) {
       this.player.respawnTimer -= dt;
       if (this.player.respawnTimer <= 0) this.respawn(this.player);
     }
@@ -1423,7 +2330,7 @@ export class Game {
     for (const a of this.actors) {
       if (a === this.player) continue;
       if (a.alive) a.update(dt, this.world);
-      else {
+      else if (!blocks(a)) {
         a.respawnTimer -= dt;
         if (a.respawnTimer <= 0) this.respawn(a);
       }
@@ -1432,9 +2339,23 @@ export class Game {
     this._updatePendingMelee(dt);
     this.updateProjectiles(dt);
     this.updatePickups(dt);
+    this._updateBurning(dt);
+    this._updatePendingDestr(dt);
+    this._updateAirstrikes(dt);
+    this._processInteractions();
+    this._updateDrops(dt);
+    this.world.updateDestructibles(dt, this.actors);
     this._recordHistory();
+    this._recordReplay();
 
-    if (!this.over) {
+    if (this.training) {
+      this.training.update(dt);
+      return;
+    }
+
+    if (this.modeCtl && !this.over) this.modeCtl.update(dt);
+
+    if (!this.over && !(this.modeCtl && this.modeCtl.ownsClock)) {
       this.timeLeft -= dt;
       const t = Math.ceil(this.timeLeft);
       if (t <= 5 && t > 0 && t !== this._lastCountdown) {
@@ -1443,7 +2364,7 @@ export class Game {
       }
       if (this.timeLeft <= 0) {
         this.timeLeft = 0;
-        if (this.mode === 'ffa') this.endMatch(null);
+        if (!this.teamMode) this.endMatch(null);
         else this.endMatch(this.scores.red === this.scores.blue ? 'draw'
           : this.scores.red > this.scores.blue ? 'red' : 'blue');
       }
@@ -1461,7 +2382,7 @@ export class Game {
       const fov = settings.fov;
       if (Math.abs(this.camera.fov - fov) > 0.01) { this.camera.fov = damp(this.camera.fov, fov, 22, dt); this.camera.updateProjectionMatrix(); }
       this.camera.updateMatrixWorld();
-      this._updateModels(dt, this.killcam.cur);
+      this._updateModels(dt, this.killcam.cur, { hideIdx: this.killcam.killerIdx, frozen: this.killcam.frozen });
       this.hud.setScope(false);
     } else {
       p.applyCamera(this.camera, this.world, dt);
@@ -1487,16 +2408,24 @@ export class Game {
           sprint: p.sprinting,
           slide: p.sliding,
           crouch: p.crouching,
-          firing: p.intent.fire,
+          firing: p.intent.fire || p.chargeT > 0,
           lookDX: p.lookDX,
           lookDY: p.lookDY,
           velY: p.vel.y,
           landImpact: p.landImpact > 0.35 ? p.landImpact * 0.4 : 0,
+          charge: w.charge ? p.chargeT / w.charge.time : 0,
+          arrowReady: p.ammo.mag > 0,
         });
       }
     }
 
     if (this.effects) this.effects.update(dt, this.camera);
+    this._updateWeather(dt);
+    this._updateRopes();
+    if (p.zip && p.alive) {
+      this._zipSoundT -= dt;
+      if (this._zipSoundT <= 0) { this._zipSoundT = 0.17; audio.zip(null, 'run'); }
+    }
 
     if (this.muzzleLightT > 0) {
       this.muzzleLightT = Math.max(0, this.muzzleLightT - dt / 0.07);
@@ -1520,17 +2449,20 @@ export class Game {
     this._updateHud(dt);
   }
 
-  /** replay: Array interpolierter Zustaende (Killcam) oder null fuer Live */
-  _updateModels(dt, replay) {
+  /**
+   * replay: Array interpolierter Zustaende (Killcam / Replay) oder null fuer Live.
+   * ctx: { hideIdx, frozen, deadFromState }
+   */
+  _updateModels(dt, replay, ctx) {
     const camPos = this.camera.position;
-    const kc = this.killcam;
+    const cx = ctx || {};
     for (let i = 0; i < this.actors.length; i++) {
       const a = this.actors[i];
       if (!a.model) continue;
       const st = replay ? replay[i] : null;
       let hidden;
       if (st) {
-        hidden = i === kc.killerIdx;
+        hidden = i === cx.hideIdx;
       } else {
         const firstPerson = a.isLocal && !(a.thirdPerson || settings.thirdPerson) && a.alive;
         const faded = !a.alive && a.model.deathT > 4.2;
@@ -1542,17 +2474,19 @@ export class Game {
       if (st) {
         // Im Replay: Waffe der aufgezeichneten Zeit zeigen
         if (a.model.currentWeapon && a.model.currentWeapon.id !== st.wid && WEAPONS[st.wid]) {
-          a.model.setWeapon(WEAPONS[st.wid], this.skinFor(a, WEAPONS[st.wid]));
+          a.model.setWeapon(WEAPONS[st.wid], this.skinFor(a, WEAPONS[st.wid]), this.stickerFor(a, WEAPONS[st.wid]));
         }
-        const victim = a.isLocal;
+        const victim = a.isLocal && !cx.deadFromState;
+        const dead = cx.deadFromState ? !st.alive : (victim ? !!cx.frozen : !a.alive);
         a.model.update(dt, {
           x: st.x, y: st.y, z: st.z, yaw: st.yaw, pitch: st.pitch,
-          speed: st.speed, grounded: st.grounded, crouch: st.crouch, slide: false, wallrun: 0,
-          dead: victim ? (kc.frozen) : !a.alive,
-          name: a.name, hp: a.hp, maxHp: a.maxHp,
+          speed: st.speed, grounded: st.grounded, crouch: st.crouch, slide: false, wallrun: 0, zipline: !!st.zip,
+          dead,
+          name: a.name, hp: cx.deadFromState ? a.maxHp : a.hp, maxHp: a.maxHp,
           enemy: !this.sameTeam(a, this.player),
-          tagColor: this.mode === 'ffa' ? '#ffffff' : (a.team === 'red' ? TEAM_HEX.red : TEAM_HEX.blue),
-          showTag: !victim && a.alive,
+          tagColor: !this.teamMode ? '#ffffff' : this.teamCssColor(a.team),
+          showTag: !victim && !dead,
+          marker: this.teamMode && !a.isLocal && this.sameTeam(a, this.player) ? 'friend' : null,
         }, camPos);
         continue;
       }
@@ -1562,6 +2496,8 @@ export class Game {
         const rx = Math.cos(a.yaw), rz = -Math.sin(a.yaw);
         wallSide = a.wallrun.nx * rx + a.wallrun.nz * rz;
       }
+      const friend = this.teamMode && !a.isLocal && this.sameTeam(a, this.player);
+      const radar = !friend && !a.isLocal && this.player.uavUntil > this.time;
       a.model.update(dt, {
         x: a.pos.x, y: a.pos.y, z: a.pos.z,
         yaw: a.yaw, pitch: a.pitch,
@@ -1570,12 +2506,16 @@ export class Game {
         crouch: a.crouching || a.sliding,
         slide: a.sliding,
         wallrun: wallSide,
+        zipline: !!a.zip,
         dead: !a.alive,
         name: a.name,
         hp: a.hp, maxHp: a.maxHp,
         enemy: !this.sameTeam(a, this.player),
-        tagColor: this.mode === 'ffa' ? '#ffffff' : (a.team === 'red' ? TEAM_HEX.red : TEAM_HEX.blue),
+        tagColor: !this.teamMode ? '#ffffff' : this.teamCssColor(a.team),
         showTag: !a.isLocal && a.alive,
+        marker: friend ? 'friend' : radar ? 'enemy' : null,
+        burning: a.burnT > 0,
+        shield: a.shield > 0,
       }, camPos);
     }
   }
@@ -1586,8 +2526,22 @@ export class Game {
     this.hud.updateWeapon(p);
     this.hud.updateStats(p);
     this.hud.updateDash(p, PHYS.DASH_COOLDOWN);
-    this.hud.updateMatch(this.mode, this.scores.red, this.scores.blue, this.timeLeft);
+    this.hud.updateMatch(this.teamMode ? this.mode : 'ffa', this.scores.red, this.scores.blue, this.timeLeft);
     if (!p.alive) this.hud.updateDeathTimer(p.respawnTimer);
+
+    // Interaktions-Hinweis ([E] Seilbahn / Waffe / Bombe)
+    const ia = p.alive ? this.interactionFor(p) : null;
+    const prompt = ia ? ia.label : '';
+    if (prompt !== this._prompt) { this._prompt = prompt; this.hud.setPrompt(prompt); }
+
+    // Missionsziel, Killstreaks, Bestenliste
+    this.hud.updateObjective(this.modeCtl ? this.modeCtl.hudText(p) : null);
+    this.hud.updateStreaks(this.training ? null : p, this.time);
+    this._boardT -= dt;
+    if (this._boardT <= 0) {
+      this._boardT = 0.5;
+      this.hud.updateBoard(!this.teamMode && !this.training ? this : null);
+    }
 
     const spread = p.currentSpread();
     const px = settings.dynCross
@@ -1599,8 +2553,12 @@ export class Game {
     this.hud.updateFloating(dt, this.camera);
 
     if (settings.showMinimap) {
+      const items = this._mmItems || (this._mmItems = []);
+      items.length = 0;
+      if (this.modeCtl) this.modeCtl.minimapItems(items);
       this.minimap.draw(
-        { x: p.pos.x, y: p.pos.y, z: p.pos.z, yaw: p.yaw, actor: p, pickups: this.pickups },
+        { x: p.pos.x, y: p.pos.y, z: p.pos.z, yaw: p.yaw, actor: p, pickups: this.pickups, uav: p.uavUntil > this.time, items, teamMode: this.teamMode,
+          teamCss: { red: this.teamCssColor('red'), blue: this.teamCssColor('blue') } },
         this.actors, (a, b) => this.sameTeam(a, b), this.time
       );
     }
@@ -1623,6 +2581,8 @@ export class Game {
     }
   }
 }
+
+function makePropMaterialDrop() { return makePropMaterial({ envMapIntensity: 0.6 }); }
 
 function falloff(w, dist) {
   if (dist <= w.falloffStart) return 1;
