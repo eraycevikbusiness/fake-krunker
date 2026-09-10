@@ -311,6 +311,8 @@ export class Game {
     this.cleanup();
 
     const training = !!cfg.training;
+    this._matchId = (this._matchId || 0) + 1;
+    this._chatGlobalT = -9;
     this.mode = training ? 'training' : (MODE_BY_ID[cfg.mode] ? cfg.mode : 'tdm');
     this.teamMode = !training && !!MODE_BY_ID[this.mode].team;
     this.scoreLimit = cfg.scoreLimit || 40;
@@ -428,7 +430,8 @@ export class Game {
       if (this.teamMode) this.hud.toast('DU BIST TEAM ' + this.teamName(this.player.team), false, this.player.team);
       if (this.modeCtl && MODE_BY_ID[this.mode]) this.hud.toast(MODE_BY_ID[this.mode].name.toUpperCase(), true);
       const talker = this.actors.find(a => a.isBot);
-      if (talker) setTimeout(() => this.botChat(talker, 'start'), 1500);
+      const mid = this._matchId;
+      if (talker) setTimeout(() => { if (this._matchId === mid && this.running) this.botChat(talker, 'start'); }, 1500);
     }
   }
 

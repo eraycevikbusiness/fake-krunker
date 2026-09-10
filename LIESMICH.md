@@ -50,7 +50,8 @@ Spiel Browser-Kürzel wie `Strg+W` ab (Keyboard-Lock-API in Chrome/Edge).
 | `1` `2` `3` / Mausrad | Primär- / Sekundär- / Nahkampfwaffe |
 | `Q` | Zurück zur vorherigen Waffe |
 | `F` | Tippen: schneller Nahkampfschlag (ohne Waffenwechsel) — Halten: Waffe inspizieren |
-| `E` | Dash (Klassen mit Dash-Perk: Run N Gun, Agent, Ninja; auch in der Luft) |
+| `E` | Interaktion: Seilbahn einhängen, liegende Waffe aufheben, Bombe legen/entschärfen (halten). Ohne Interaktion: Dash (Run N Gun, Agent, Ninja; auch in der Luft) |
+| `X` / mittlere Maustaste | Enterhaken (Hunter, Agent, Archer): an Wand oder Decke schießen und ranziehen, `Leertaste` löst mit Schwung |
 | `4` | Luftschlag auf den Blickpunkt (Killstreak ab 7 Kills) |
 | Linksklick halten | Bogen spannen, loslassen schießt; Minigun läuft an |
 | `G` | Granate werfen |
@@ -108,6 +109,9 @@ Schlag-, Nachlade- und Wechselanimationen.
 * **Hafen** — Containerhafen mit zwei Portalkränen (per Sprungpad
   erreichbar), Lagerhalle mit Fenstern, Pier über dem Wasser, Tanklager
   mit explosiven Fässern
+* **Dschungel** — Fluss mit Wasserfall und Pool auf dem Plateau,
+  Hängebrücken, zwei Tempelruinen mit Stufenpyramiden, Bäume als Deckung,
+  Klippenplateau im Westen
 
 **Wetter und Tageszeit** (im Spielen-Tab, pro Match): Klar, Abend, Regen
 (Regenstreifen, nasse Böden, Regenrauschen), Nebel (Sicht 60 m), Nacht
@@ -129,10 +133,35 @@ sie weg sind. Explosionen aus Fässern werden dem Schützen gutgeschrieben.
 | Gun Game | Jeder Kill schaltet zur nächsten von 17 Waffen (Pistole bis Katana). Wer mit der letzten Waffe trifft, gewinnt; ein Messer-Kill wirft das Opfer eine Stufe zurück |
 | Capture the Flag | Gegnerflagge berühren, zur eigenen Basis tragen (13 % langsamer). Fallen gelassene Flaggen kehren nach 25 s oder per Berührung zurück |
 | Hardpoint | Eine Zone wandert alle 60 s. Nur ein Team in der Zone = 1 Punkt/s, beide = umkämpft |
+| Infection | Alle starten als Überlebende. Nach 8 s wird einer (ab 10 Spielern zwei) zum Zombie: grün, 130 HP, schneller, Doppelsprung, Dash, nur Klauen. Wer stirbt, kommt als Zombie wieder. Zombies gewinnen, wenn alle infiziert sind, Überlebende nach 4 Minuten |
+| Search & Destroy | Runden ohne Respawn, erste zu 4 Runden. Angreifer legen die Bombe bei A oder B (E 3 s halten, 35 s Zünder), Verteidiger entschärfen (E 5 s halten). Runde endet auch, wenn ein Team ausgelöscht ist oder die Zeit abläuft. Seitenwechsel zur Halbzeit, Tote schauen bis zum Rundenende zu |
 
 Bots verstehen die Modi: In CTF greift die Hälfte an, die andere verteidigt
 oder holt die eigene Flagge zurück; in Hardpoint laufen sie in die Zone und
 halten sie. Flaggen und Zone erscheinen auf der Minimap.
+
+**Enterhaken und Seilbahnen:** Hunter, Agent und Archer haben einen
+Enterhaken (`X`, bis 48 m). Der Anker sitzt an Wand oder Decke, der Spieler
+wird mit bis zu 31 u/s herangezogen, kann in der Luft leicht lenken und mit
+`Leertaste` samt Schwung loslassen. Bots nutzen ihn, um Abstand zu schließen
+oder hohe Wegpunkte zu erreichen. Auf Hafen, Citadel, Burg, Sandstorm und
+Dschungel hängen Seilbahnen zwischen Dächern: am gelben Pfosten `E` drücken,
+mit 19 u/s hinüberfahren, `Leertaste` springt ab. Bots fahren mit, wenn das
+andere Ende näher an ihrem Ziel liegt.
+
+**Waffen fallen lassen und aufheben:** Beim Tod bleibt die Primärwaffe mit
+ihrer Munition 30 s liegen (auch mit Skin, Sticker und Aufsätzen). Wer
+darauf zugeht und `E` drückt, tauscht seine Waffe im gleichen Slot dagegen
+ein, die alte bleibt liegen. Bots heben Waffen auf, wenn ihre eigene leer
+ist.
+
+**Waffen-Aufsätze** (Klassen-Tab, max. zwei pro Waffe, für Primär- und
+Sekundärwaffe): Schalldämpfer (leiser, kein Mündungsfeuer, Bots hören dich
+kaum, −8 % Schaden), Visier (mehr Zoom, ruhiger im ADS), erweitertes
+Magazin (+40 %, langsamer nachladen), Griff (−25 % Rückstoß), Laser (−35 %
+Hüftstreuung, schnellerer Wechsel). Aufsätze sind als Bauteile am Modell
+sichtbar, in der Skin-Vorschau ebenfalls. Bots tragen zufällige Aufsätze.
+Definition in `src/game/weapons.js` unter `ATTACHMENTS`.
 
 **Killstreaks** (abschaltbar): 3 Kills → UAV (14 s, Gegner auf der Minimap
 und mit Marker durch Wände), 5 Kills → Schild (80 Punkte, absorbiert vor
@@ -184,6 +213,17 @@ Waffe treibt den Lauf hoch und wird nur teilweise kompensiert. Geschossen
 wird erst, wenn die Zielfeder ruhig ist. Kopfschüsse gibt es nur, wenn der
 Bot eingeschwungen ist und das Ziel stillsteht. Das Blickfeld ist
 begrenzt; hinter sich bemerkt ein Bot nur laute oder sehr nahe Gegner.
+
+**Persönlichkeiten und Chat:** Jeder Bot bekommt einen Typ. *Rusher*
+halten weniger Abstand, dashen öfter und suchen kaum Deckung. *Camper*
+suchen hohe Posten mit Überblick, ducken sich dort und bleiben 12–25 s.
+*Flanker* laufen seitlich versetzt Richtung Gegnerspawn und strafen mehr.
+*Support* bleibt beim Team. Alle reagieren auf Teamkameraden in Not: Wer
+unter 40 % Leben gerade getroffen wurde, bekommt Hilfe („halte durch,
+komme!“), Support immer, andere manchmal. Im Chat unten links melden sich
+Bots zum Start („gl hf“), nach Kills gegen dich („gg ez“), wenn du sie
+erwischst („nice shot“, „lag!“), mit der Flagge, bei Killstreaks und als
+Zombies. Abschaltbar in den Einstellungen.
 
 Dazu kommt Taktik: Bei wenig Leben oder beim Nachladen suchen sie einen
 Navigationspunkt, den der Gegner nicht sieht, und gehen dort in Deckung.
@@ -283,6 +323,29 @@ Treffererkennung für Hitscan, Projektile und Nahkampf (`src/game/training.js`).
   zum Ziel. Ohne Mausbewegung passiert nichts, es wird nie von selbst gezielt.
   Gilt auch für Zielscheiben im Training.
 
+## Replay
+
+Jedes Match wird mit 20 Hz aufgezeichnet (Position, Blick, Waffe,
+Schüsse, Leben aller Spieler). Auf dem Endbildschirm: **Replay ansehen**
+startet die Wiedergabe mit Flugkamera (WASD + Maus, E/C hoch/runter, Shift
+schnell), Leertaste pausiert, Pfeiltasten springen 5 s, Tasten 1–4 setzen
+das Tempo (0,25× bis 2×), R zurück zum Anfang, Esc beendet. **Replay
+speichern** lädt eine JSON-Datei herunter, **Replay laden** im Spielen-Tab
+spielt sie wieder ab (Karte und Wetter stecken in der Datei). Der
+Charakter-Tab spielt den gewählten Kill-Effekt direkt an der Figur ab.
+
+## Barrierefreiheit und Touch
+
+* **Teamfarben:** Rot/Blau, Orange/Blau, Magenta/Cyan oder Gelb/Violett.
+  Die Wahl gilt für Figuren, Marker, Killfeed, Minimap und Punkteleiste
+  (`src/core/teams.js`).
+* **HUD-Größe:** 80–160 %.
+* **Touch-Steuerung** (automatisch auf Geräten mit Touch, sonst in den
+  Einstellungen einschaltbar): linker Joystick läuft (voll ausgelenkt =
+  Sprint), rechte Bildschirmhälfte schaut sich um, Buttons für Feuer,
+  Sprung, Zielen, Nachladen, Waffe, Ducken, Granate, E, X, F und Pause. Das
+  HUD rückt dabei von den Buttons weg. Kein Pointer-Lock nötig.
+
 ## Dash und Wandlauf
 
 * **Dash (E):** kurzer Stoß in Bewegungsrichtung (auch in der Luft), 2,4 s
@@ -357,8 +420,8 @@ serve.mjs             Mini-Webserver (Windows/Linux/macOS)
 START.bat             Start unter Windows
 start.sh / .command   Start unter Linux / macOS
 src/
-  main.js             Einstiegspunkt, Spielschleife, Zustände, Auto-Auflösung
-  core/               Eingabe, Audio, Einstellungen, Mathe-Helfer
+  main.js             Einstiegspunkt, Spielschleife, Zustände, Auto-Auflösung, Replay-Wiedergabe
+  core/               Eingabe, Audio, Einstellungen, Mathe-Helfer, Teamfarben (teams.js), Touch-Steuerung (touch.js)
   world/
     mapdata.js        Kartendefinitionen + Rampen-Validierung, Flaggen, Hardpoints, Zerstoerbares
     weather.js        Wetter und Tageszeit (Licht, Nebel, Laternen)
@@ -370,7 +433,7 @@ src/
     stickers.js       Waffen-Sticker (Canvas-Texturen, automatische Platzierung)
     cosmetics.js      Outfits, Kopfbedeckungen, Kill-Effekte, Kill-Icons
     training.js       Aim-Trainer (Drills, Zielscheiben, Bestwerte)
-    modes.js          Capture the Flag, Hardpoint, Gun Game (Regeln, Bot-Ziele, HUD)
+    modes.js          Capture the Flag, Hardpoint, Gun Game, Infection, Search & Destroy (Regeln, Bot-Ziele, HUD)
     actor.js          Bewegungsphysik, Trefferzonen, Waffenlogik (gemeinsame Basis)
     player.js         Lokaler Spieler, Kamera, Rückstoß, Todeskamera
     bot.js            Bot-KI

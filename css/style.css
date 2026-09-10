@@ -332,11 +332,19 @@ input[type=color]::-webkit-color-swatch { border: none; border-radius: 3px; }
 #touch-ui .tb-reload { right: 30px; bottom: 200px; }
 #touch-ui .tb-weapon { right: 92px; bottom: 210px; font-size: 12px; }
 #touch-ui .tb-crouch { left: 24px; bottom: 30px; font-size: 11px; }
-#touch-ui .tb-nade { right: 30px; top: 46%; }
-#touch-ui .tb-use { right: 92px; top: 46%; }
-#touch-ui .tb-hook { right: 154px; top: 46%; }
-#touch-ui .tb-melee { right: 216px; top: 46%; }
+#touch-ui .tb-nade { right: 30px; bottom: 285px; }
+#touch-ui .tb-use { right: 92px; bottom: 285px; }
+#touch-ui .tb-hook { right: 154px; bottom: 285px; }
+#touch-ui .tb-melee { right: 216px; bottom: 285px; }
 #touch-ui .tb-pause { right: 22px; top: 14px; width: 44px; height: 44px; font-size: 22px; border-radius: 10px; }
+/* Im Touch-Modus rueckt das HUD von den Buttons weg */
+body.touch-mode #hud-bl { left: 20px; bottom: 150px; }
+body.touch-mode #hud-br { right: 270px; bottom: 22px; }
+body.touch-mode #slots { right: 270px; bottom: 118px; }
+body.touch-mode #dash-ind { right: 400px; }
+body.touch-mode #killfeed { right: 80px; }
+body.touch-mode #chat { bottom: 250px; }
+body.touch-mode #click-hint { display: none !important; }
 
 /* ------------------------------------------------------------
    Sticker

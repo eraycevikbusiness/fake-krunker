@@ -144,6 +144,7 @@ export class TouchControls {
   enable(v) {
     this.enabled = !!v;
     this.root.classList.toggle('hidden', !v);
+    document.body.classList.toggle('touch-mode', !!v);   // HUD macht Platz fuer die Buttons
     this.input.virtualLock = !!v;
     this.input.touchMove = v ? this.move : null;
     if (!v) { this.move.x = this.move.y = 0; }
