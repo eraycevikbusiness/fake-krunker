@@ -48,10 +48,15 @@ export class Menu {
       name: $('opt-name'), mode: $('opt-mode'), map: $('opt-map'), weather: $('opt-weather'), modeDesc: $('mode-desc'),
       bots: $('opt-bots'), diff: $('opt-diff'), limit: $('opt-limit'), timeL: $('opt-time'),
       lblBots: $('lbl-bots'), lblDiff: $('lbl-diff'), lblLimit: $('lbl-limit'), lblTime: $('lbl-time'),
-      endTitle: $('end-title'), endSub: $('end-sub'), endBoard: $('end-board'),
-      backGame: $('btn-back-game'), classHint: $('class-hint'),
+      endTitle: $('end-title'), endSub: $('end-sub'), endBoard: $('end-board'), endNext: $('end-next'),
+      backGame: $('btn-back-game'), classHint: $('class-hint'), pauseOnline: $('pause-online'),
+      onStatus: $('online-status'), roomList: $('room-list'), onCode: $('online-code'),
+      onMode: $('on-mode'), onMap: $('on-map'), onWeather: $('on-weather'), onPlayers: $('on-players'),
+      onDiff: $('on-diff'), onLimit: $('on-limit'), onTime: $('on-time'), onPrivate: $('on-private'),
+      lblOnPlayers: $('lbl-on-players'), lblOnDiff: $('lbl-on-diff'), lblOnLimit: $('lbl-on-limit'), lblOnTime: $('lbl-on-time'),
       crossPreview: null,
     };
+    this.online = { mode: 'rotate', map: 'rotate', weather: 'rotate', players: 8, difficulty: 1, scoreLimit: 40, timeLimit: 8 };
 
     this._loadProfile();
     this._wireTabs();
@@ -61,6 +66,7 @@ export class Menu {
     this._buildTraining();
     this._wireOptions();
     this._buildSettings();
+    this._wireOnline();
 
     $('btn-play').addEventListener('click', () => {
       audio.uiClick();
@@ -152,7 +158,100 @@ export class Menu {
     if (tab === 'char') this._showCharPreview(); else if (this.charPreview) this.charPreview.stop();
     if (tab === 'training') this._refreshDrillBests();
     if (tab === 'settings') this._drawCrossPreview();
+    if (tab === 'online') this.h.onOnlineRefresh && this.h.onOnlineRefresh();
   }
+
+  // --------------------------------------------------------
+  // Online / Mehrspieler
+  // --------------------------------------------------------
+  _wireOnline() {
+    const e = this.el;
+    if (!e.onMode) return;
+    const upd = () => {
+      const o = this.online;
+      e.lblOnPlayers.textContent = e.onPlayers.value;
+      e.lblOnDiff.textContent = DIFFICULTY[+e.onDiff.value].name;
+      const lim = +e.onLimit.value, m = e.onMode.value;
+      let limTxt = lim + ' Kills';
+      if (m === 'ctf') limTxt = Math.max(3, Math.min(10, Math.round(lim / 10))) + ' Flaggen';
+      else if (m === 'hardpoint') limTxt = Math.max(30, lim * 2) + ' Punkte';
+      else if (m === 'gungame') limTxt = 'alle Waffen';
+      else if (m === 'sd') limTxt = Math.max(3, Math.min(8, Math.round(lim / 10))) + ' Runden';
+      else if (m === 'infection') limTxt = 'bis alle infiziert sind';
+      else if (m === 'rotate') limTxt = lim + ' (je nach Modus)';
+      e.lblOnLimit.textContent = limTxt;
+      e.lblOnTime.textContent = e.onTime.value + ' min';
+      o.mode = e.onMode.value; o.map = e.onMap.value; o.weather = e.onWeather.value;
+      o.players = +e.onPlayers.value; o.difficulty = +e.onDiff.value; o.scoreLimit = +e.onLimit.value; o.timeLimit = +e.onTime.value;
+    };
+    e.onMode.value = this.online.mode; e.onMap.value = this.online.map; e.onWeather.value = this.online.weather;
+    e.onPlayers.value = this.online.players; e.onDiff.value = this.online.difficulty; e.onLimit.value = this.online.scoreLimit; e.onTime.value = this.online.timeLimit;
+    [e.onPlayers, e.onDiff, e.onLimit, e.onTime].forEach(el => el.addEventListener('input', () => { upd(); this._saveProfile(); }));
+    [e.onMode, e.onMap, e.onWeather].forEach(el => el.addEventListener('change', () => { upd(); this._saveProfile(); }));
+    upd();
+    const quick = () => { audio.uiClick(); this._saveProfile(); this.h.onOnlineQuick && this.h.onOnlineQuick(); };
+    const bq1 = $('btn-online-quick'), bq2 = $('btn-online-quick2');
+    if (bq1) bq1.addEventListener('click', quick);
+    if (bq2) bq2.addEventListener('click', quick);
+    const bc = $('btn-online-create');
+    if (bc) bc.addEventListener('click', () => {
+      audio.uiClick(); this._saveProfile();
+      this.h.onOnlineCreate && this.h.onOnlineCreate(Object.assign({}, this.online), !!e.onPrivate.checked);
+    });
+    const join = () => {
+      const code = (e.onCode.value || '').trim().toUpperCase();
+      if (code.length < 4) { this.setOnlineStatus('Bitte einen Raumcode eingeben', 'err'); return; }
+      audio.uiClick(); this._saveProfile();
+      this.h.onOnlineJoin && this.h.onOnlineJoin(code);
+    };
+    const bj = $('btn-online-join');
+    if (bj) bj.addEventListener('click', join);
+    e.onCode.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); join(); } });
+    const br = $('btn-online-refresh');
+    if (br) br.addEventListener('click', () => { audio.uiClick(); this.h.onOnlineRefresh && this.h.onOnlineRefresh(true); });
+  }
+
+  setOnlineStatus(text, kind) {
+    const e = this.el.onStatus;
+    if (!e) return;
+    e.textContent = text;
+    e.className = kind || 'dim';
+  }
+
+  /** Oeffentliche Raeume anzeigen */
+  renderRooms(list, online) {
+    const box = this.el.roomList;
+    if (!box) return;
+    box.innerHTML = '';
+    if (!list || !list.length) {
+      box.innerHTML = `<div class="dim">Noch kein öffentlicher Raum offen. Mit „Schnell beitreten“ eröffnest du einen.</div>`;
+      return;
+    }
+    for (const r of list) {
+      const d = document.createElement('div');
+      d.className = 'room-row';
+      const mode = MODE_BY_ID[r.mode] ? MODE_BY_ID[r.mode].name : r.mode;
+      d.innerHTML =
+        `<div><div class="rn">${escapeHtml(r.name)} <span class="dim" style="font-size:12px;letter-spacing:2px">${escapeHtml(r.code)}</span></div>` +
+        `<div class="rd">${escapeHtml(mode)} · ${escapeHtml(String(r.map).toUpperCase())} · ${r.phase === 'ending' ? 'Match endet' : 'läuft'}</div></div>` +
+        `<div class="rp" title="Spieler / Bots">${r.humans}<span class="dim" style="font-size:13px"> +${r.bots} Bots</span></div>` +
+        `<button class="small-btn">BEITRETEN</button>`;
+      d.querySelector('button').addEventListener('click', () => { audio.uiClick(); this._saveProfile(); this.h.onOnlineJoin && this.h.onOnlineJoin(r.code); });
+      box.appendChild(d);
+    }
+  }
+
+  /** Endbildschirm online: Countdown bis zum naechsten Match, kein "Nochmal"-Button */
+  setOnlineEnd(secs) {
+    const e = this.el;
+    const again = $('btn-again');
+    if (again) again.classList.toggle('hidden', secs !== null);
+    if (!e.endNext) return;
+    e.endNext.classList.toggle('hidden', secs === null);
+    if (secs !== null) e.endNext.innerHTML = 'Nächstes Match in <b>' + Math.max(0, Math.ceil(secs)) + '</b> s …';
+  }
+
+  setPauseOnline(v) { if (this.el.pauseOnline) this.el.pauseOnline.classList.toggle('hidden', !v); }
 
   // --------------------------------------------------------
   // Einstellungen (mit Fadenkreuz-Vorschau und Hitsound-Test)
@@ -559,7 +658,14 @@ export class Menu {
       killEffect: this.killEffect,
       killIcon: this.killIcon,
       trainingOpts: Object.assign({}, this.training),
+      online: Object.assign({}, this.online),
     };
+  }
+
+  /** Profil fuer den Server (Name, Klasse, Aufsaetze, Kosmetik) */
+  getProfile() {
+    const c = this.getConfig();
+    return { name: c.name, cls: c.classId, att: c.attachments, outfit: c.outfit, hat: c.hat, fx: c.killEffect, icon: c.killIcon, skins: c.skins, stickers: c.stickers };
   }
 
   _loadProfile() {
@@ -601,6 +707,16 @@ export class Menu {
         if (DRILLS.some(d => d.id === t.drill)) this.training.drill = t.drill;
         if (TARGET_SIZES.some(s => s[0] === t.size)) this.training.size = t.size;
         if (TARGET_DISTS.some(s => s[0] === t.dist)) this.training.dist = t.dist;
+      }
+      if (p.online && typeof p.online === 'object') {
+        const o = p.online;
+        if (o.mode === 'rotate' || MODE_BY_ID[o.mode]) this.online.mode = o.mode;
+        if (typeof o.map === 'string') this.online.map = o.map;
+        if (typeof o.weather === 'string') this.online.weather = o.weather;
+        if (o.players) this.online.players = Math.max(2, Math.min(16, +o.players));
+        if (o.difficulty !== undefined) this.online.difficulty = Math.max(0, Math.min(3, +o.difficulty));
+        if (o.scoreLimit) this.online.scoreLimit = +o.scoreLimit;
+        if (o.timeLimit) this.online.timeLimit = +o.timeLimit;
       }
     } catch (err) { /* ignorieren */ }
   }
@@ -644,8 +760,12 @@ export class Menu {
   showEnd(game, winner, won) {
     const e = this.el;
     e.end.classList.remove('hidden');
+    this.setOnlineEnd(game.online ? 12 : null);
 
-    if (!game.teamMode) {
+    if (winner === null || winner === undefined) {
+      e.endTitle.textContent = 'MATCH BEENDET';
+      e.endSub.textContent = game.teamMode ? `${game.scores.red} : ${game.scores.blue}` : '';
+    } else if (!game.teamMode) {
       e.endTitle.textContent = won ? 'SIEG!' : 'MATCH BEENDET';
       if (game.mode === 'gungame') e.endSub.textContent = winner ? `${winner.name} hat alle Waffen durch (${winner.kills} Kills)` : '';
       else e.endSub.textContent = winner ? `${winner.name} gewinnt mit ${winner.kills} Kills` : '';
@@ -657,7 +777,12 @@ export class Menu {
       e.endSub.textContent =
         `Team ${winner === 'red' ? 'ROT' : 'BLAU'} gewinnt  ·  ${game.scores.red} : ${game.scores.blue}`;
     }
-    e.endTitle.style.color = won ? '#ffcc00' : '#ff6b6b';
+    e.endTitle.style.color = '';
+    e.endTitle.classList.toggle('lose', !won);
+    // Titel-Animation neu starten
+    e.endTitle.style.animation = 'none';
+    void e.endTitle.offsetWidth;
+    e.endTitle.style.animation = '';
 
     const sorted = game.actors.slice().sort((a, b) => b.score - a.score || b.kills - a.kills);
     const p = game.player;
@@ -666,8 +791,8 @@ export class Menu {
 
     const rows = sorted.map((a, i) => {
       const kd = (a.kills / Math.max(1, a.deaths)).toFixed(2);
-      return `<div class="sb-row${a.isLocal ? ' me' : ''}">` +
-        `<span class="nm">${i + 1}. ${escapeHtml(a.name)}</span>` +
+      return `<div class="sb-row${a.isLocal ? ' me' : ''}" style="--i:${i}">` +
+        `<span class="nm">${i + 1}. ${a.isBot ? '<i class="bot">BOT</i>' : ''}${escapeHtml(a.name)}</span>` +
         `<span>${a.kills}</span><span>${a.deaths}</span><span>${a.score}</span><span>${kd}</span></div>`;
     }).join('');
 

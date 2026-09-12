@@ -1,6 +1,6 @@
 // ============================================================
 // Einstiegspunkt: Bootstrap, Spielschleife, Zustandsverwaltung,
-// Touch-Steuerung, Replay-Wiedergabe
+// Touch-Steuerung, Replay-Wiedergabe, Online-Anbindung (Lobby, Chat)
 // ============================================================
 
 import { Input } from './core/input.js';
@@ -12,6 +12,7 @@ import { HUD } from './ui/hud.js';
 import { Minimap } from './ui/minimap.js';
 import { Menu } from './ui/menu.js';
 import { Game } from './game/game.js';
+import { NetClient } from './net/client.js';
 import { clamp } from './core/utils.js';
 
 const canvas = document.getElementById('game-canvas');
@@ -25,15 +26,26 @@ const minimap = new Minimap(document.getElementById('minimap'));
 let game = null;
 let menu = null;
 let touch = null;
+let net = null;
 let state = 'menu';        // menu | playing | paused | ended | replay
 let scoreboardOpen = false;
 let showPerf = settings.showFps;
 let lastReplayData = null;
+let endCountdown = null;
+let roomInfo = null;
 
 function applyHudScale() {
   document.documentElement.style.setProperty('--hud-scale', String(clamp(settings.hudScale || 1, 0.8, 1.6)));
 }
+/** Interface-Design: Theme, Animationen, Glas-Effekt als data-Attribute am <html> */
+function applyUiTheme() {
+  const root = document.documentElement;
+  root.dataset.theme = settings.uiTheme || 'dark';
+  root.dataset.anim = settings.uiAnim === false ? 'off' : 'on';
+  root.dataset.glass = settings.uiGlass === false ? 'off' : 'on';
+}
 applyHudScale();
+applyUiTheme();
 applyTeamCss(document.documentElement);
 
 // ------------------------------------------------------------
@@ -53,6 +65,11 @@ function boot() {
       setTimeout(() => {
         menu.hideLoading();
         menu.showMenu('play', false);
+        // Direktlink in einen Raum (?raum=CODE)
+        const params = new URLSearchParams(location.search);
+        const code = params.get('raum') || params.get('join') || params.get('room');
+        if (code) { menu.showMenu('online', false); goOnline({ join: code.toUpperCase() }); }
+        else if (params.has('online')) goOnline({ quick: true });
       }, 180);
       return;
     }
@@ -65,16 +82,18 @@ function boot() {
 
 function createGame() {
   game = new Game(canvas, hud, minimap, input);
-  game.onMatchEnd = (winner, won) => {
+  game.onEnd = (winner, won) => {
     setState('ended');
     hud.show(false);
     hud.showScoreboard(false);
+    scoreboardOpen = false;
     hud.hideDeath();
     hud.setClickHint(false);
     input.exitLock();
     lastReplayData = game.getReplayData();
     menu.setReplayAvailable(!!lastReplayData);
     menu.showEnd(game, winner, won);
+    if (game.online) startEndCountdown(12);
   };
   game.onTrainingEnd = (results) => {
     setState('ended');
@@ -96,6 +115,7 @@ function setState(s) {
 }
 
 function inMatch() { return !!game && game.running && (state === 'playing' || state === 'paused'); }
+function isOnline() { return !!game && game.online && !!net; }
 
 function resumeGame() {
   menu.hideMenu();
@@ -109,7 +129,132 @@ function pauseGame() {
   setState('paused');
   input.exitLock();
   hud.setClickHint(false);
+  hud.closeChat();
+  menu.setPauseOnline(isOnline());
   menu.showPause();
+}
+
+// ------------------------------------------------------------
+// Online: Verbindung, Lobby, Match-Wechsel
+// ------------------------------------------------------------
+async function connectOnline() {
+  if (net && net.connected) return net;
+  if (net) net.close();
+  net = new NetClient();
+  net.onMessage = onNetMessage;
+  net.onClose = () => onlineDisconnected('Verbindung zum Server verloren');
+  menu.setOnlineStatus('Verbinde …');
+  await net.connect(NetClient.defaultUrl(), menu.getProfile());
+  return net;
+}
+
+/** action: {quick:true} | {create:{settings, private}} | {join:'CODE'} */
+async function goOnline(action) {
+  audio.init(); audio.resume();
+  try { await connectOnline(); }
+  catch (e) {
+    menu.setOnlineStatus('Kein Server erreichbar. Läuft das Spiel über „node serve.mjs“ bzw. START.bat?', 'err');
+    menu.showMenu('online', menu.inGame);
+    return;
+  }
+  if (action.quick) net.send({ t: 'quick' });
+  else if (action.create) net.send({ t: 'create', settings: action.create.settings, private: action.create.private });
+  else if (action.join) net.send({ t: 'join', code: action.join });
+  menu.setOnlineStatus('Trete bei …', 'ok');
+}
+
+function refreshOnline(force) {
+  if (net && net.connected) { net.send({ t: 'list' }); return; }
+  if (force || !net) connectOnline().catch(() => menu.setOnlineStatus('Kein Server erreichbar. Läuft das Spiel über „node serve.mjs“ bzw. START.bat?', 'err'));
+}
+
+function onNetMessage(m) {
+  switch (m.t) {
+    case 'hi':
+      menu.setOnlineStatus(`Verbunden · ${m.online} online`, 'ok');
+      menu.renderRooms(m.rooms, m.online);
+      break;
+    case 'rooms':
+      menu.setOnlineStatus(`Verbunden · ${m.online} online`, 'ok');
+      menu.renderRooms(m.rooms, m.online);
+      break;
+    case 'error':
+      menu.setOnlineStatus(m.msg || 'Fehler', 'err');
+      if (inMatch() || state === 'ended') hud.toast(m.msg || 'FEHLER', true);
+      break;
+    case 'welcome':
+    case 'match':
+      startOnlineMatch(m);
+      break;
+    default:
+      if (game && game.online) game.onNet(m);
+      break;
+  }
+}
+
+function startOnlineMatch(m) {
+  if (!game) createGame();
+  if (game.replaying) game.stopReplay();
+  stopEndCountdown();
+  menu.hideMenu(); menu.hidePause(); menu.hideEnd();
+  hud.showScoreboard(false); scoreboardOpen = false;
+  roomInfo = m.room;
+  try {
+    game.startOnline(net, m);
+  } catch (e) {
+    console.error(e);
+    onlineDisconnected('Match konnte nicht geladen werden: ' + e.message);
+    return;
+  }
+  hud.setRoomTag(roomInfo.code, roomInfo.private);
+  menu.setOnlineStatus('Im Raum ' + roomInfo.code + (roomInfo.private ? ' (privat)' : ''), 'ok');
+  if (m.end) {
+    // Match ist gerade vorbei: Rangliste zeigen, das naechste startet automatisch
+    setState('ended');
+    hud.show(false);
+    menu.showEnd(game, null, false);
+    startEndCountdown(8);
+  } else {
+    setState('playing');
+    requestLock();
+  }
+}
+
+function startEndCountdown(secs) {
+  stopEndCountdown();
+  let left = secs;
+  menu.setOnlineEnd(left);
+  endCountdown = setInterval(() => {
+    left -= 1;
+    menu.setOnlineEnd(Math.max(0, left));
+    if (left <= -10) stopEndCountdown();
+  }, 1000);
+}
+function stopEndCountdown() { if (endCountdown) { clearInterval(endCountdown); endCountdown = null; } }
+
+function leaveOnline() {
+  stopEndCountdown();
+  if (net) { net.onClose = null; net.close(); net = null; }
+  roomInfo = null;
+  hud.setRoomTag(null);
+  hud.closeChat();
+  menu.setPauseOnline(false);
+  menu.setOnlineEnd(null);
+  if (game) { game.online = false; game.net = null; }
+}
+
+function onlineDisconnected(msg) {
+  const wasInMatch = !!(game && game.online);
+  leaveOnline();
+  if (wasInMatch) {
+    input.exitLock();
+    menu.hidePause(); menu.hideEnd();
+    hud.show(false); hud.showScoreboard(false); hud.hideDeath(); hud.setClickHint(false);
+    if (game) { game.running = false; game.cleanup(); }
+    setState('menu');
+    menu.showMenu('online', false);
+  }
+  menu.setOnlineStatus(msg, 'err');
 }
 
 // ------------------------------------------------------------
@@ -119,6 +264,7 @@ function startReplay(data) {
   if (!data) return;
   audio.init(); audio.resume();
   if (!game) createGame();
+  if (game.online) leaveOnline();
   menu.hideMenu(); menu.hidePause(); menu.hideEnd();
   hud.show(false);
   if (!game.startReplay(data)) { menu.showMenu('play', false); return; }
@@ -156,6 +302,7 @@ menu = new Menu({
     audio.resume();
     if (!game) createGame();
     if (game.replaying) game.stopReplay();
+    if (game.online || net) leaveOnline();
     menu.hideMenu();
     menu.hidePause();
     menu.hideEnd();
@@ -167,11 +314,13 @@ menu = new Menu({
   onBackToGame: () => {
     // Aus dem Menue (Einstellungen/Klassen) zurueck zum Pausenbildschirm
     menu.hideMenu();
-    if (inMatch()) { setState('paused'); menu.showPause(); }
+    if (inMatch()) { setState('paused'); menu.setPauseOnline(isOnline()); menu.showPause(); }
   },
   onQuit: () => {
     // Wichtig: Mauszeiger wieder freigeben, sonst bleibt das Menue unklickbar
     input.exitLock();
+    const wasOnline = isOnline() || !!roomInfo;
+    if (wasOnline) leaveOnline();
     menu.hidePause();
     menu.hideEnd();
     hud.show(false);
@@ -180,12 +329,13 @@ menu = new Menu({
     hud.setClickHint(false);
     if (game) { if (game.replaying) game.stopReplay(); game.running = false; game.cleanup(); }
     setState('menu');
-    menu.showMenu('play', false);
+    menu.showMenu(wasOnline ? 'online' : 'play', false);
   },
   onOpenSettings: () => { setState('paused'); },
   onSettingChange: (id) => {
     saveSettings();
     if (id === 'hudScale' || id === '*') applyHudScale();
+    if (id === 'uiTheme' || id === 'uiAnim' || id === 'uiGlass' || id === '*') applyUiTheme();
     if (id === 'colorblind' || id === '*') { applyTeamCss(document.documentElement); if (game && game.world) game.refreshTeamColors(); }
     if (id === 'touch' || id === '*') touch.enable(wantsTouch());
     if (!game) return;
@@ -202,7 +352,7 @@ menu = new Menu({
   },
   onClassChange: (id) => {
     if (inMatch()) {
-      game.pendingClassId = id;
+      game.setPendingClass(id);
       hud.toast('KLASSE WIRD BEIM NÄCHSTEN SPAWN GEWECHSELT', true);
     }
   },
@@ -211,23 +361,10 @@ menu = new Menu({
   },
   onFullscreen: () => input.toggleFullscreen(),
   onSkinChange: (weaponId, skinId) => {
-    // Im laufenden Match sofort uebernehmen
-    if (!inMatch() || !game.player) return;
-    const p = game.player;
-    p.skins[weaponId] = skinId;
-    if (p.weapon.id === weaponId) {
-      game.viewmodel.setWeapon(p.weapon, p.skin, skinId, game.stickerFor(p));
-      if (p.model) p.model.setWeapon(p.weapon, skinId, game.stickerFor(p));
-    }
+    if (inMatch()) game.setPlayerSkin(weaponId, skinId, undefined);
   },
   onStickerChange: (weaponId, stickerId) => {
-    if (!inMatch() || !game.player) return;
-    const p = game.player;
-    p.stickers[weaponId] = stickerId;
-    if (p.weapon.id === weaponId) {
-      game.viewmodel.setWeapon(p.weapon, p.skin, game.skinFor(p), stickerId);
-      if (p.model) p.model.setWeapon(p.weapon, game.skinFor(p), stickerId);
-    }
+    if (inMatch()) game.setPlayerSkin(weaponId, undefined, stickerId);
   },
   onCosmeticChange: (c) => {
     if (!inMatch() || !game.player) return;
@@ -238,6 +375,10 @@ menu = new Menu({
   onReplay: () => startReplay(lastReplayData),
   onReplaySave: () => downloadReplay(lastReplayData),
   onReplayLoad: (data) => { lastReplayData = data; startReplay(data); },
+  onOnlineQuick: () => goOnline({ quick: true }),
+  onOnlineCreate: (settings, priv) => goOnline({ create: { settings, private: priv } }),
+  onOnlineJoin: (code) => goOnline({ join: code }),
+  onOnlineRefresh: (force) => refreshOnline(force),
 });
 
 // Touch-Steuerung (Handy/Tablet)
@@ -265,6 +406,7 @@ input.onLockChange((locked, error) => {
   if (input.virtualLock) return;
   if (state === 'replay') { hud.setClickHint(true); return; }
   if (state !== 'playing') return;
+  if (hud.chatOpen) return;          // Chat tippen: Maus darf frei sein
   if (error) {
     // Browser hat die Sperre verweigert (z.B. Chrome-Cooldown nach Esc):
     // Spiel bleibt eingefroren, Hinweis zum Klicken zeigen.
@@ -279,15 +421,35 @@ canvas.addEventListener('click', () => {
   if ((state === 'playing' || state === 'replay') && !input.locked && !input.virtualLock) requestLock();
 });
 
-// Tab-Wechsel / Fenster minimiert -> pausieren
+// Tab-Wechsel / Fenster minimiert -> pausieren (offline; online laeuft das Match weiter)
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden && state === 'playing') pauseGame();
+  if (document.hidden && state === 'playing' && !isOnline()) pauseGame();
 });
 
 // ------------------------------------------------------------
 // Globale Tasten
 // ------------------------------------------------------------
 addEventListener('keydown', (e) => {
+  // Chat-Eingabe offen: nur Enter / Escape auswerten
+  if (hud.chatOpen) {
+    if (e.code === 'Enter' || e.code === 'NumpadEnter') {
+      e.preventDefault();
+      const text = hud.takeChat();
+      if (text && game && game.online) game.sendChat(text);
+      if (state === 'playing') requestLock();
+    } else if (e.code === 'Escape') {
+      e.preventDefault();
+      hud.closeChat();
+      if (state === 'playing') requestLock();
+    }
+    return;
+  }
+  if ((e.code === 'Enter' || e.code === 'NumpadEnter') && state === 'playing' && isOnline() && !menu.menuVisible) {
+    e.preventDefault();
+    input.releaseAll();
+    hud.openChat();
+    return;
+  }
   if (e.code === 'Escape') {
     if (state === 'replay') {
       exitReplay();
@@ -297,6 +459,7 @@ addEventListener('keydown', (e) => {
       if (menu.menuVisible) {
         // Einstellungen/Klassen im Match offen -> zurueck zum Pausenmenue
         menu.hideMenu();
+        menu.setPauseOnline(isOnline());
         menu.showPause();
       } else {
         resumeGame();
@@ -305,7 +468,7 @@ addEventListener('keydown', (e) => {
     return;
   }
   if (e.code === 'Tab') {
-    if (inMatch()) {
+    if (inMatch() || (state === 'ended' && isOnline())) {
       e.preventDefault();
       if (!scoreboardOpen) {
         scoreboardOpen = true;
@@ -403,13 +566,16 @@ function loop(now) {
     frames = 0; fpsTimer = 0;
   }
 
-  // Simulation nur, wenn die Maus gefangen ist (oder Touch aktiv) - sonst steht das Spiel
+  // Offline: Simulation nur, wenn die Maus gefangen ist (oder Touch aktiv) - sonst steht das Spiel
   // (verhindert, dass man beim Klicken auf "Weiterspielen" getoetet wird).
+  // Online: die Welt laeuft immer weiter, nur die Eingabe wird abgeschaltet.
+  const online = isOnline();
   const hasControl = input.locked || input.virtualLock;
-  const simulate = game && state === 'playing' && hasControl;
+  const canPlay = state === 'playing' && hasControl && !hud.chatOpen;
+  const simulate = game && game.world && (online ? state !== 'replay' : (state === 'playing' && hasControl));
 
   if (simulate) {
-    input.enabled = true;
+    input.enabled = canPlay;
 
     // Eingabe genau einmal pro Frame lesen ...
     game.readInput(dt);
@@ -426,6 +592,7 @@ function loop(now) {
 
     // Kamera, Modelle, Effekte und HUD einmal pro Frame
     game.postUpdate(dt);
+    if (online) game.netUpdate(dt);
     input.endFrame();
   } else if (game && state === 'replay' && game.replaying) {
     input.enabled = hasControl;
@@ -440,7 +607,7 @@ function loop(now) {
 
   if (game && game.world) {
     game.render();
-    if (simulate) updateDynamicResolution(dt);
+    if (simulate && canPlay) updateDynamicResolution(dt);
   }
 
   if (showPerf && game && game.world) {
@@ -450,8 +617,9 @@ function loop(now) {
       `Draws ${info.render.calls}\n` +
       `Tris  ${(info.render.triangles / 1000).toFixed(1)}k\n` +
       `Scale ${Math.round(game.dynScale * 100)}%\n` +
-      `Bots  ${game.actors.length - 1}\n` +
+      `Actors ${game.actors.length}\n` +
       `Proj  ${game.projectiles.length}\n` +
+      (online ? `Ping  ${net.ping} ms\n` : '') +
       `Nav   ${game.world.nav ? game.world.nav.nodes.length : 0}`,
       true
     );
@@ -484,7 +652,9 @@ window.__FRAGSTORM__ = {
   get state() { return state; },
   set state(s) { setState(s); },
   get replayData() { return lastReplayData; },
-  startReplay, exitReplay,
+  get net() { return net; },
+  get room() { return roomInfo; },
+  startReplay, exitReplay, goOnline, leaveOnline,
   input, hud, menu, settings, touch,
 };
 window.__KRUNKER__ = window.__FRAGSTORM__;
@@ -493,7 +663,7 @@ window.__KRUNKER__ = window.__FRAGSTORM__;
 canvas.addEventListener('webglcontextlost', (e) => {
   e.preventDefault();
   console.warn('WebGL-Kontext verloren');
-  if (state === 'playing') pauseGame();
+  if (state === 'playing' && !isOnline()) pauseGame();
 });
 canvas.addEventListener('webglcontextrestored', () => {
   console.warn('WebGL-Kontext wiederhergestellt');

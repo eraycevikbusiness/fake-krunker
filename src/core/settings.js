@@ -49,6 +49,11 @@ export const SCHEMA = [
   { id: 'crossOpacity',label: 'Deckkraft',           type: 'range', min: 0.2, max: 1, step: 0.05, def: 1, fmt: v => Math.round(v * 100) + '%' },
   { id: 'dynCross',    label: 'Dynamisch (weitet sich mit Streuung)', type: 'check', def: true },
 
+  { head: 'INTERFACE' },
+  { id: 'uiTheme',     label: 'Design',              type: 'select', def: 'dark', options: [['dark','Dunkel'],['oled','Schwarz (OLED)'],['neon','Neon'],['light','Hell']] },
+  { id: 'uiAnim',      label: 'Interface-Animationen', type: 'check', def: true },
+  { id: 'uiGlass',     label: 'Glas-Effekt (Unschärfe hinter Panels)', type: 'check', def: true },
+
   { head: 'HUD & BARRIEREFREIHEIT' },
   { id: 'hudScale',    label: 'HUD-Größe',           type: 'range', min: 0.8, max: 1.6, step: 0.05, def: 1, fmt: v => Math.round(v * 100) + '%' },
   { id: 'colorblind',  label: 'Teamfarben (Farbenblind-Modus)', type: 'select', def: 'off', options: [['off','Rot / Blau'],['orange','Orange / Blau'],['magenta','Magenta / Cyan'],['yellow','Gelb / Violett']] },

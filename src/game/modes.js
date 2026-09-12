@@ -1,12 +1,14 @@
 // ============================================================
-// Spielmodi mit Zielen: Capture the Flag, Hardpoint, Gun Game.
-// Jeder Modus haengt am Spiel (game.modeCtl), bekommt update(dt),
-// Kill-/Spawn-Ereignisse und liefert Bots ein Ziel (objectiveFor).
+// Spielmodi mit Zielen: Capture the Flag, Hardpoint, Gun Game,
+// Infection, Search & Destroy. Jeder Modus haengt an der Simulation
+// (sim.modeCtl), bekommt update(dt), Kill-/Spawn-Ereignisse und liefert
+// Bots ein Ziel (objectiveFor). Keine Darstellung: Meldungen laufen als
+// Ereignisse ueber sim.emit({t:'mode', m:<modus>, k:<art>, ...}), die
+// Meshes baut modefx.js aus dem Zustand. netState()/applyNetState()
+// spiegeln den Zustand vom Server auf den Client.
 // ============================================================
 
-import * as THREE from 'three';
 import { GUNGAME_ORDER, WEAPONS } from './weapons.js';
-import { audio } from '../core/audio.js';
 import { clamp } from '../core/utils.js';
 
 export const MODES = [
@@ -21,8 +23,10 @@ export const MODES = [
 export const MODE_BY_ID = {};
 for (const m of MODES) MODE_BY_ID[m.id] = m;
 
-const TEAM_COLOR = { red: 0xd94a4a, blue: 0x4a86d9 };
-const ZOMBIE_COLOR = 0x4ad95a;
+export const TEAM_COLOR = { red: 0xd94a4a, blue: 0x4a86d9 };
+export const ZOMBIE_COLOR = 0x4ad95a;
+
+const r2 = (v) => Math.round(v * 100) / 100;
 
 // ------------------------------------------------------------
 // Capture the Flag
@@ -41,35 +45,11 @@ export class CTFMode {
         d = { x: sp.x * 0.85, z: sp.z * 0.85 };
       }
       const y = game.world.groundAt(d.x, d.z, 60);
-      this.flags[team] = { team, home: { x: d.x, y, z: d.z }, x: d.x, y, z: d.z, state: 'home', carrier: null, dropT: 0, mesh: null };
-      this._buildFlagMesh(this.flags[team]);
+      this.flags[team] = { team, home: { x: d.x, y, z: d.z }, x: d.x, y, z: d.z, state: 'home', carrier: null, dropT: 0 };
     }
-    this._msgT = 0;
   }
 
-  _buildFlagMesh(f) {
-    const col = TEAM_COLOR[f.team];
-    const g = new THREE.Group();
-    const pole = new THREE.Mesh(new THREE.BoxGeometry(0.14, 3.2, 0.14), new THREE.MeshStandardMaterial({ color: 0xd8dde3, roughness: 0.4, metalness: 0.7 }));
-    pole.position.y = 1.6;
-    const cloth = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.9, 0.06), new THREE.MeshStandardMaterial({ color: col, emissive: col, emissiveIntensity: 0.35, roughness: 0.8 }));
-    cloth.position.set(0.8, 2.7, 0);
-    const base = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 1.8, 0.16, 24), new THREE.MeshStandardMaterial({ color: col, emissive: col, emissiveIntensity: 0.5, transparent: true, opacity: 0.55 }));
-    base.position.y = 0.08;
-    const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, 40, 8, 1, true), new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.16, depthWrite: false, side: THREE.DoubleSide, toneMapped: false }));
-    beam.position.y = 20;
-    pole.castShadow = true; cloth.castShadow = true;
-    g.add(pole, cloth, beam);
-    f.mesh = g; f.cloth = cloth; f.beam = beam;
-    // Basismarkierung bleibt immer an der Heimatposition
-    const home = new THREE.Group();
-    home.add(base);
-    home.position.set(f.home.x, f.home.y, f.home.z);
-    f.homeMesh = home;
-    this.game.scene.add(g, home);
-  }
-
-  _say(text, small) { this.game.hud.toast(text, small); }
+  _ev(k, extra) { this.game.emit(Object.assign({ t: 'mode', m: 'ctf', k }, extra || {})); }
 
   update(dt) {
     const g = this.game;
@@ -102,32 +82,14 @@ export class CTFMode {
           }
         }
       }
-      // Mesh nachziehen
-      const m = f.mesh;
-      if (f.state === 'carried') {
-        const c = f.carrier;
-        m.position.set(c.pos.x + Math.sin(c.yaw) * 0.45, c.pos.y + 0.4, c.pos.z + Math.cos(c.yaw) * 0.45);
-        m.rotation.set(0.35, c.yaw, 0);
-        m.scale.setScalar(0.75);
-        f.beam.visible = true;
-      } else {
-        m.position.set(f.x, f.y, f.z);
-        m.rotation.set(0, g.time * 0.6, 0);
-        m.scale.setScalar(1);
-        f.beam.visible = f.state === 'dropped';
-      }
-      f.cloth.rotation.y = Math.sin(g.time * 3 + (team === 'red' ? 0 : 1)) * 0.15;
     }
   }
 
   _pickup(f, a) {
     f.state = 'carried'; f.carrier = a;
     a.carrying = f; a.carryMult = 0.86;
-    const g = this.game;
-    if (a.isLocal) { this._say('FLAGGE GENOMMEN! ZURÜCK ZUR BASIS'); audio.objective('pickup'); }
-    else if (a.team === g.player.team) { this._say(a.name + ' hat die gegnerische Flagge', true); audio.objective('pickup'); }
-    else { this._say('GEGNER HAT UNSERE FLAGGE!', true); audio.objective('lost'); }
-    if (a.isBot) { a.objectiveDirty = true; g.botChat(a, 'flag'); }
+    this._ev('pickup', { a: a.id, f: f.team });
+    if (a.isBot) { a.objectiveDirty = true; this.game.botChat(a, 'flag'); }
   }
 
   _drop(f) {
@@ -136,18 +98,14 @@ export class CTFMode {
     f.carrier = null;
     f.state = 'dropped';
     f.dropT = 25;
-    const g = this.game;
-    f.y = g.world.groundAt(f.x, f.z, f.y + 2) ;
-    if (f.team === g.player.team) this._say('FLAGGE FALLEN GELASSEN', true);
-    else this._say('GEGNERISCHE FLAGGE LIEGT AM BODEN', true);
+    f.y = this.game.world.groundAt(f.x, f.z, f.y + 2);
+    this._ev('drop', { f: f.team, x: r2(f.x), y: r2(f.y), z: r2(f.z) });
   }
 
   _return(f, by) {
     f.state = 'home'; f.carrier = null;
     f.x = f.home.x; f.y = f.home.y; f.z = f.home.z;
-    const g = this.game;
-    if (by && by.isLocal) { this._say('FLAGGE ZURÜCKGEBRACHT', true); audio.objective('return'); }
-    else if (f.team === g.player.team) { this._say('UNSERE FLAGGE IST ZURÜCK', true); audio.objective('return'); }
+    this._ev('return', { f: f.team, a: by ? by.id : 0 });
   }
 
   _capture(f, c) {
@@ -157,10 +115,7 @@ export class CTFMode {
     g.scores[c.team]++;
     f.state = 'home'; f.carrier = null;
     f.x = f.home.x; f.y = f.home.y; f.z = f.home.z;
-    if (c.isLocal) { this._say('FLAGGE EROBERT! +250'); audio.objective('capture'); }
-    else if (c.team === g.player.team) { this._say(c.name + ' erobert die Flagge!'); audio.objective('capture'); }
-    else { this._say('GEGNER EROBERN UNSERE FLAGGE'); audio.objective('lost'); }
-    if (g.effects) g.effects.spawnFlash(f.home.x, f.home.y, f.home.z, TEAM_COLOR[c.team]);
+    this._ev('capture', { f: f.team, a: c.id, sc: [g.scores.red, g.scores.blue] });
     g._checkMatchEnd();
   }
 
@@ -202,6 +157,7 @@ export class CTFMode {
 
   hudText(player) {
     const own = this.flags[player.team], en = this.flags[player.team === 'red' ? 'blue' : 'red'];
+    if (!own || !en) return null;
     const st = (f) => f.state === 'home' ? 'in der Basis' : f.state === 'carried' ? (f.carrier ? 'bei ' + f.carrier.name : 'unterwegs') : 'am Boden';
     return { line: `CTF · ${this.game.scores.red} : ${this.game.scores.blue} · Ziel ${this.limit}`, sub: `Eigene Flagge ${st(own)} · Gegnerflagge ${st(en)}`, carry: !!player.carrying };
   }
@@ -214,12 +170,30 @@ export class CTFMode {
     }
   }
 
+  /** Netz: Zustand beider Flaggen */
+  netState() {
+    const s = (f) => [f.state === 'home' ? 0 : f.state === 'carried' ? 1 : 2, r2(f.x), r2(f.y), r2(f.z), f.carrier ? f.carrier.id : 0, r2(f.dropT)];
+    return [s(this.flags.red), s(this.flags.blue)];
+  }
+  applyNetState(s) {
+    if (!s) return;
+    const teams = ['red', 'blue'];
+    for (let i = 0; i < 2; i++) {
+      const f = this.flags[teams[i]], v = s[i];
+      if (!v) continue;
+      const prevCarrier = f.carrier;
+      f.state = v[0] === 0 ? 'home' : v[0] === 1 ? 'carried' : 'dropped';
+      f.x = v[1]; f.y = v[2]; f.z = v[3];
+      f.carrier = v[4] ? this.game.actorById(v[4]) : null;
+      f.dropT = v[5];
+      if (prevCarrier && prevCarrier !== f.carrier) { prevCarrier.carrying = null; prevCarrier.carryMult = 1; }
+      if (f.carrier) { f.carrier.carrying = f; f.carrier.carryMult = 0.86; }
+    }
+  }
+
   dispose() {
     for (const team of ['red', 'blue']) {
       const f = this.flags[team];
-      this.game.scene.remove(f.mesh, f.homeMesh);
-      f.mesh.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
-      f.homeMesh.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
       if (f.carrier) { f.carrier.carrying = null; f.carrier.carryMult = 1; }
     }
   }
@@ -242,32 +216,15 @@ export class HardpointMode {
     this.owner = null;          // Team, das die Zone allein haelt
     this.contested = false;
     this.tick = 0;
-    this._buildMesh();
-    this._moveTo(0);
   }
 
-  _buildMesh() {
-    const g = new THREE.Group();
-    this.discMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.22, depthWrite: false, toneMapped: false });
-    const disc = new THREE.Mesh(new THREE.CylinderGeometry(this.radius, this.radius, 0.3, 32, 1, false), this.discMat);
-    disc.position.y = 0.15;
-    this.ringMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6, depthWrite: false, toneMapped: false, side: THREE.DoubleSide });
-    const ring = new THREE.Mesh(new THREE.CylinderGeometry(this.radius, this.radius, 2.4, 40, 1, true), this.ringMat);
-    ring.position.y = 1.2;
-    const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 60, 8, 1, true), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.12, depthWrite: false, side: THREE.DoubleSide, toneMapped: false }));
-    beam.position.y = 30;
-    this.beam = beam;
-    g.add(disc, ring, beam);
-    this.mesh = g;
-    this.game.scene.add(g);
-  }
+  _ev(k, extra) { this.game.emit(Object.assign({ t: 'mode', m: 'hp', k }, extra || {})); }
 
-  _moveTo(i) {
+  _moveTo(i, silent) {
     this.idx = i % this.points.length;
-    const p = this.points[this.idx];
-    this.mesh.position.set(p.x, p.y, p.z);
     this.rotateT = 60;
     this.owner = null;
+    if (!silent) this._ev('move', { i: this.idx });
   }
 
   get zone() { return this.points[this.idx]; }
@@ -275,27 +232,20 @@ export class HardpointMode {
   update(dt) {
     const g = this.game;
     this.rotateT -= dt;
-    if (this.rotateT <= 0) {
-      this._moveTo(this.idx + 1);
-      g.hud.toast('HARDPOINT WANDERT', true);
-      audio.objective('zone');
-    }
+    if (this.rotateT <= 0) this._moveTo(this.idx + 1);
     const z = this.zone;
-    let red = 0, blue = 0, meIn = false;
+    let red = 0, blue = 0;
     for (const a of g.actors) {
       if (!a.alive) continue;
       if (Math.hypot(a.pos.x - z.x, a.pos.z - z.z) > this.radius || Math.abs(a.pos.y - z.y) > 3.5) continue;
       if (a.team === 'red') red++; else blue++;
-      if (a.isLocal) meIn = true;
     }
     this.contested = red > 0 && blue > 0;
     const owner = this.contested ? null : red > 0 ? 'red' : blue > 0 ? 'blue' : null;
     if (owner !== this.owner) {
       this.owner = owner;
-      if (owner === g.player.team) { g.hud.toast('ZONE GEHALTEN', true); audio.objective('pickup'); }
-      else if (owner) { g.hud.toast('GEGNER HALTEN DIE ZONE', true); audio.objective('lost'); }
+      this._ev('owner', { o: owner });
     }
-    this.meIn = meIn;
     this.tick += dt;
     if (this.tick >= 1) {
       this.tick -= 1;
@@ -307,12 +257,6 @@ export class HardpointMode {
         g._checkMatchEnd();
       }
     }
-    const col = this.contested ? 0xffcc00 : this.owner === 'red' ? 0xff4444 : this.owner === 'blue' ? 0x4499ff : 0xffffff;
-    this.discMat.color.setHex(col); this.ringMat.color.setHex(col); this.beam.material.color.setHex(col);
-    // Von innen fast unsichtbar, sonst faerbt der Ring das ganze Bild
-    this.ringMat.opacity = meIn ? 0.07 : 0.4;
-    this.discMat.opacity = meIn ? 0.06 : 0.2;
-    this.mesh.rotation.y += dt * 0.4;
   }
 
   objectiveFor(bot) {
@@ -329,11 +273,17 @@ export class HardpointMode {
     return null;
   }
 
+  /** Ist der Akteur in der Zone? */
+  inZone(a) {
+    const z = this.zone;
+    return Math.hypot(a.pos.x - z.x, a.pos.z - z.z) <= this.radius && Math.abs(a.pos.y - z.y) <= 3.5;
+  }
+
   hudText(player) {
     const who = this.contested ? 'UMKÄMPFT' : this.owner === player.team ? 'DEIN TEAM HÄLT' : this.owner ? 'GEGNER HALTEN' : 'FREI';
     const z = this.zone;
     const d = Math.round(Math.hypot(player.pos.x - z.x, player.pos.z - z.z));
-    return { line: `HARDPOINT · ${this.game.scores.red} : ${this.game.scores.blue} · Ziel ${this.limit}`, sub: `${who} · wandert in ${Math.ceil(this.rotateT)} s · ${d} m`, inZone: this.meIn };
+    return { line: `HARDPOINT · ${this.game.scores.red} : ${this.game.scores.blue} · Ziel ${this.limit}`, sub: `${who} · wandert in ${Math.ceil(this.rotateT)} s · ${d} m`, inZone: player.alive && this.inZone(player) };
   }
 
   minimapItems(out) {
@@ -341,12 +291,17 @@ export class HardpointMode {
     out.push({ x: z.x, z: z.z, color: this.contested ? '#ffcc00' : this.owner === 'red' ? '#ff5a5a' : this.owner === 'blue' ? '#5a9aff' : '#ffffff', label: 'HP', zone: this.radius });
   }
 
-  onDeath() {}
-
-  dispose() {
-    this.game.scene.remove(this.mesh);
-    this.mesh.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
+  netState() { return [this.idx, this.owner === 'red' ? 1 : this.owner === 'blue' ? 2 : 0, this.contested ? 1 : 0, r2(this.rotateT)]; }
+  applyNetState(s) {
+    if (!s) return;
+    this.idx = s[0] % this.points.length;
+    this.owner = s[1] === 1 ? 'red' : s[1] === 2 ? 'blue' : null;
+    this.contested = !!s[2];
+    this.rotateT = s[3];
   }
+
+  onDeath() {}
+  dispose() {}
 }
 
 // ------------------------------------------------------------
@@ -380,11 +335,11 @@ export class GunGameMode {
   onKill(victim, attacker, causeId) {
     const g = this.game;
     if (!attacker || attacker === victim) return false;
-    const humiliation = causeId === 'knife' || causeId === 'melee' || causeId === 'katana' || causeId === 'tknife';
-    if (humiliation && victim.ggLevel > 0 && WEAPONS[causeId] && (causeId === 'knife' || causeId === 'melee')) {
+    const humiliation = causeId === 'knife' || causeId === 'melee';
+    if (humiliation && victim.ggLevel > 0) {
       victim.ggLevel--;
       this.applyLevel(victim);
-      if (victim.isLocal) g.hud.toast('STUFE VERLOREN (MESSER)', true);
+      g.emit({ t: 'mode', m: 'gg', k: 'lost', a: victim.id, lvl: victim.ggLevel });
     }
     const last = this.order.length - 1;
     if (attacker.ggLevel >= last) {
@@ -392,10 +347,7 @@ export class GunGameMode {
     }
     attacker.ggLevel++;
     this.applyLevel(attacker);
-    if (attacker.isLocal) {
-      g.hud.toast('STUFE ' + (attacker.ggLevel + 1) + '/' + this.order.length + ' · ' + WEAPONS[this.order[attacker.ggLevel]].name.toUpperCase(), true);
-      audio.objective('level');
-    }
+    g.emit({ t: 'mode', m: 'gg', k: 'level', a: attacker.id, lvl: attacker.ggLevel });
     return false;
   }
 
@@ -410,30 +362,9 @@ export class GunGameMode {
     return { line: `GUN GAME · STUFE ${player.ggLevel + 1}/${n}`, sub: `Nächste Waffe: ${next}` };
   }
   minimapItems() {}
+  netState() { return null; }
+  applyNetState() {}
   dispose() {}
-}
-
-// ------------------------------------------------------------
-// Sprite mit Buchstabe (Bombenplaetze A/B), durch Waende sichtbar
-// ------------------------------------------------------------
-function letterSprite(text, colorHex) {
-  const cv = document.createElement('canvas');
-  cv.width = 128; cv.height = 128;
-  const g = cv.getContext('2d');
-  g.fillStyle = 'rgba(0,0,0,0.55)';
-  g.beginPath(); g.arc(64, 64, 50, 0, Math.PI * 2); g.fill();
-  g.lineWidth = 6; g.strokeStyle = colorHex; g.stroke();
-  g.font = 'bold 72px Rajdhani, Segoe UI, sans-serif';
-  g.textAlign = 'center'; g.textBaseline = 'middle';
-  g.fillStyle = colorHex;
-  g.fillText(text, 64, 68);
-  const tex = new THREE.CanvasTexture(cv);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false, toneMapped: false });
-  const sp = new THREE.Sprite(mat);
-  sp.renderOrder = 26;
-  sp.scale.set(2.2, 2.2, 1);
-  return sp;
 }
 
 // ------------------------------------------------------------
@@ -450,9 +381,10 @@ export class InfectionMode {
     this.startT = 8;            // Sekunden bis zur ersten Infektion
     this.started = false;
     this.roundLen = Math.min(timeLimit || 240, 240);
-    this.growlT = 0;
     this._lastCount = -1;
   }
+
+  _ev(k, extra) { this.game.emit(Object.assign({ t: 'mode', m: 'inf', k }, extra || {})); }
 
   /** Alle starten als Ueberlebende */
   setupActor(a) {
@@ -469,13 +401,15 @@ export class InfectionMode {
 
   /** Vor dem Respawn: Infizierte werden zu Zombies */
   beforeRespawn(a) {
-    if (a.pendingZombie) { a.pendingZombie = false; this._makeZombie(a, false); }
+    if (a.pendingZombie) { a.pendingZombie = false; this.makeZombie(a, false); }
   }
 
-  _makeZombie(a, announce) {
+  /** Spieler zum Zombie machen (auch als Spiegel auf dem Client) */
+  makeZombie(a, announce) {
     const g = this.game;
     a.team = 'red';
     a.zombie = true;
+    a.pendingZombie = false;
     a.setLoadout(['claws']);
     a.maxHp = 130; a.hp = Math.min(a.hp > 0 ? a.hp : 130, 130);
     a.maxArmor = 0; a.armor = 0;
@@ -484,9 +418,7 @@ export class InfectionMode {
     a.canDash = true;
     g.rebuildActorModel(a);
     if (a.isBot) { a.preferDist = 2; a.objectiveDirty = true; a.target = null; }
-    if (a.isLocal) { g.hud.setMyTeam('red'); g.hud.toast('DU BIST INFIZIERT!', false, 'red'); g.hud.toast('Jage die Überlebenden mit den Klauen', true); }
-    else if (announce) g.hud.toast(a.name + ' wurde infiziert', true);
-    if (announce) audio.growl({ x: a.pos.x, y: a.pos.y + 1.5, z: a.pos.z });
+    if (!g.online) this._ev('infect', { a: a.id, ann: !!announce });
   }
 
   update(dt) {
@@ -494,31 +426,23 @@ export class InfectionMode {
     if (!this.started) {
       this.startT -= dt;
       const s = Math.ceil(this.startT);
-      if (s !== this._lastCount && s > 0 && s <= 5) { this._lastCount = s; g.hud.toast('INFEKTION IN ' + s, true); audio.countdown(s === 1); }
+      if (s !== this._lastCount && s > 0 && s <= 5) { this._lastCount = s; this._ev('count', { n: s }); }
       if (this.startT <= 0) {
         this.started = true;
         const alive = g.actors.slice();
         const n = alive.length >= 10 ? 2 : 1;
-        for (let i = 0; i < n; i++) {
+        for (let i = 0; i < n && alive.length; i++) {
           const pick = alive.splice((Math.random() * alive.length) | 0, 1)[0];
-          this._makeZombie(pick, true);
+          this.makeZombie(pick, true);
           g.respawn(pick, true);
         }
-        g.hud.toast('DIE INFEKTION BEGINNT', false, 'red');
+        this._ev('start');
       }
       return;
     }
     this.roundLen -= dt;
     g.timeLeft = Math.max(0, this.roundLen);
     if (g.over) return;
-    // Zombie-Knurren in der Naehe
-    this.growlT -= dt;
-    if (this.growlT <= 0) {
-      this.growlT = 3 + Math.random() * 4;
-      const p = g.player;
-      const z = g.actors.find(a => a.zombie && a.alive && a !== p && Math.hypot(a.pos.x - p.pos.x, a.pos.z - p.pos.z) < 30);
-      if (z) audio.growl({ x: z.pos.x, y: z.pos.y + 1.5, z: z.pos.z });
-    }
     const humans = g.actors.filter(a => a.team === 'blue').length;
     if (humans === 0) { g.endMatch('red'); return; }
     if (this.roundLen <= 0) {
@@ -534,8 +458,14 @@ export class InfectionMode {
   onDeath(victim, attacker) {
     if (victim.team === 'blue' && this.started) {
       victim.pendingZombie = true;
-      if (victim.isLocal) this.game.hud.toast('DU WIRST ZUM ZOMBIE', true);
+      this._ev('doomed', { a: victim.id });
     }
+  }
+
+  /** Neuer Spieler mitten im Match: nach dem Start als Zombie */
+  setupLateActor(a) {
+    this.setupActor(a);
+    if (this.started) this.makeZombie(a, false);
   }
 
   objectiveFor(bot) {
@@ -571,6 +501,8 @@ export class InfectionMode {
     return { line: `ÜBERLEBENDE ${humans} · ZOMBIES ${zombies}`, sub: player.zombie ? 'Jage die Überlebenden' : 'Überlebe bis zum Ende der Runde' };
   }
   minimapItems() {}
+  netState() { return [this.started ? 1 : 0, r2(this.startT), r2(this.roundLen)]; }
+  applyNetState(s) { if (!s) return; this.started = !!s[0]; this.startT = s[1]; this.roundLen = s[2]; }
   dispose() {}
 }
 
@@ -585,42 +517,21 @@ export class SearchDestroyMode {
     this.teamNames = { red: 'ANGREIFER', blue: 'VERTEIDIGER' };
     this.roundsToWin = clamp(Math.round((scoreLimit || 40) / 10), 3, 8);
     this.round = 0;
-    this.phase = 'start';       // start | live | end
+    this.phase = 'start';       // start | live | end | over
     this.phaseT = 0;
     this.roundTime = 110;
     this.sites = (mapDef.bombsites && mapDef.bombsites.length ? mapDef.bombsites : (mapDef.hardpoints || []).slice(0, 2).map((p, i) => ({ name: i ? 'B' : 'A', x: p.x, z: p.z })))
       .map((s) => ({ name: s.name, x: s.x, z: s.z, y: game.world.groundAt(s.x, s.z, 60) }));
     if (!this.sites.length) this.sites.push({ name: 'A', x: 0, z: 0, y: game.world.groundAt(0, 0, 60) });
-    this.bomb = null;           // { site, x, y, z, t, mesh }
+    this.bomb = null;           // { site, x, y, z, t }
     this.plant = { actor: null, t: 0 };
     this.defuse = { actor: null, t: 0 };
     this.swapped = false;
     this._tickT = 0;
-    this._buildMeshes();
-    this._startRound();
+    if (!game.online) this._startRound();
   }
 
-  _buildMeshes() {
-    const g = this.game;
-    this.siteMeshes = [];
-    for (const s of this.sites) {
-      const disc = new THREE.Mesh(new THREE.CylinderGeometry(3.5, 3.5, 0.2, 28), new THREE.MeshBasicMaterial({ color: 0xffcc00, transparent: true, opacity: 0.18, depthWrite: false, toneMapped: false }));
-      disc.position.set(s.x, s.y + 0.1, s.z);
-      const sp = letterSprite(s.name, '#ffcc00');
-      sp.position.set(s.x, s.y + 3.2, s.z);
-      g.scene.add(disc, sp);
-      this.siteMeshes.push(disc, sp);
-    }
-    const bm = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.35, 0.5), new THREE.MeshStandardMaterial({ color: 0x2a2d33, roughness: 0.5, metalness: 0.6 }));
-    const led = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.08, 0.12), new THREE.MeshBasicMaterial({ color: new THREE.Color(3, 0.2, 0.2), toneMapped: false }));
-    led.position.set(0.2, 0.2, 0);
-    bm.add(led);
-    bm.visible = false;
-    this.bombMesh = bm; this.bombLed = led;
-    g.scene.add(bm);
-  }
-
-  _say(t, small, team) { this.game.hud.toast(t, small, team); }
+  _ev(k, extra) { this.game.emit(Object.assign({ t: 'mode', m: 'sd', k }, extra || {})); }
 
   _startRound() {
     const g = this.game;
@@ -629,7 +540,6 @@ export class SearchDestroyMode {
     this.phaseT = 4;
     this.roundTime = 110;
     this.bomb = null;
-    this.bombMesh.visible = false;
     this.plant.actor = null; this.plant.t = 0;
     this.defuse.actor = null; this.defuse.t = 0;
     // Seitenwechsel zur Halbzeit
@@ -637,26 +547,21 @@ export class SearchDestroyMode {
       this.swapped = true;
       for (const a of g.actors) { a.team = a.team === 'red' ? 'blue' : 'red'; g.rebuildActorModel(a); }
       const s = g.scores.red; g.scores.red = g.scores.blue; g.scores.blue = s;
-      g.hud.setMyTeam(g.player.team);
-      this._say('SEITENWECHSEL', false, g.player.team);
+      this._ev('swap', { teams: g.actors.map(a => [a.id, a.team]), sc: [g.scores.red, g.scores.blue] });
     }
     for (const a of g.actors) { a.respawnTimer = 0; g.respawn(a, true); a.spawnProtect = 4; }
-    this._say('RUNDE ' + this.round, false);
-    this._say(g.player.team === 'red' ? 'Lege die Bombe bei A oder B (E halten)' : 'Verteidige A und B', true);
-    if (g.player.isLocal) g.hud.hideDeath();
+    this._ev('round', { n: this.round });
   }
 
   _endRound(winner, reason) {
     const g = this.game;
-    if (this.phase === 'end') return;
+    if (this.phase === 'end' || this.phase === 'over') return;
     this.phase = 'end';
     this.phaseT = 4;
     g.scores[winner]++;
     for (const a of g.actors) if (a.team === winner && a.alive) a.score += 100;
-    const mine = winner === g.player.team;
-    this._say((mine ? 'RUNDE GEWONNEN' : 'RUNDE VERLOREN') + ' · ' + reason, false, winner);
-    if (mine) audio.objective('capture'); else audio.objective('lost');
-    if (this.bomb && reason !== 'BOMBE EXPLODIERT') this.bombMesh.visible = false;
+    this._ev('end', { w: winner, r: reason, sc: [g.scores.red, g.scores.blue] });
+    if (reason !== 'BOMBE EXPLODIERT') this.bomb = null;
     if (g.scores[winner] >= this.roundsToWin) { this.phase = 'over'; g.endMatch(winner); }
   }
 
@@ -667,7 +572,7 @@ export class SearchDestroyMode {
     if (this.phase === 'start') {
       this.phaseT -= dt;
       for (const a of g.actors) a.spawnProtect = Math.max(a.spawnProtect, 0.05);
-      if (this.phaseT <= 0) { this.phase = 'live'; this._say('LOS!', true); audio.countdown(true); }
+      if (this.phaseT <= 0) { this.phase = 'live'; this._ev('live'); }
       return;
     }
     if (this.phase === 'end') {
@@ -688,10 +593,11 @@ export class SearchDestroyMode {
       this.bomb.t -= dt;
       this._tickT -= dt;
       const rate = this.bomb.t < 10 ? 0.25 : this.bomb.t < 20 ? 0.5 : 1;
-      if (this._tickT <= 0) { this._tickT = rate; audio.bomb('tick', { x: this.bomb.x, y: this.bomb.y + 0.5, z: this.bomb.z }); this.bombLed.visible = !this.bombLed.visible; }
+      if (this._tickT <= 0) { this._tickT = rate; this._ev('tick', { x: r2(this.bomb.x), y: r2(this.bomb.y), z: r2(this.bomb.z) }); }
       if (this.bomb.t <= 0) {
-        g.explode(this.bomb.x, this.bomb.y + 0.5, this.bomb.z, { radius: 14, damage: 300, minMult: 0.3, force: 18, selfMult: 1 }, null, null, null, 'bomb');
-        this.bombMesh.visible = false;
+        const b = this.bomb;
+        g.explode(b.x, b.y + 0.5, b.z, { radius: 14, damage: 300, minMult: 0.3, force: 18, selfMult: 1 }, null, null, null, 'bomb');
+        this.bomb = null;
         this._endRound('red', 'BOMBE EXPLODIERT');
         return;
       }
@@ -719,17 +625,14 @@ export class SearchDestroyMode {
     if (actor !== pl.actor) { pl.actor = actor; pl.t = 0; }
     if (!actor) return;
     pl.t += dt;
-    if ((pl.t * 6 | 0) !== ((pl.t - dt) * 6 | 0)) audio.bomb('plant', { x: actor.pos.x, y: actor.pos.y + 1, z: actor.pos.z });
+    if ((pl.t * 6 | 0) !== ((pl.t - dt) * 6 | 0)) this._ev('planting', { a: actor.id });
     actor.intent.fwd = 0; actor.intent.side = 0;
     if (pl.t >= 3) {
       const s = this._nearSite(actor);
       this.bomb = { site: s, x: s.x + (actor.pos.x - s.x) * 0.5, y: s.y, z: s.z + (actor.pos.z - s.z) * 0.5, t: 35 };
-      this.bombMesh.position.set(this.bomb.x, this.bomb.y + 0.18, this.bomb.z);
-      this.bombMesh.visible = true;
       pl.actor = null; pl.t = 0;
       actor.score += 100;
-      this._say('BOMBE GELEGT BEI ' + s.name, false, 'red');
-      audio.bomb('planted');
+      this._ev('planted', { a: actor.id, site: s.name });
       for (const b of g.actors) if (b.isBot) b.objectiveDirty = true;
     }
   }
@@ -746,20 +649,22 @@ export class SearchDestroyMode {
     if (actor !== df.actor) { df.actor = actor; df.t = 0; }
     if (!actor) return;
     df.t += dt;
-    if ((df.t * 4 | 0) !== ((df.t - dt) * 4 | 0)) audio.bomb('defuse', { x: actor.pos.x, y: actor.pos.y + 1, z: actor.pos.z });
+    if ((df.t * 4 | 0) !== ((df.t - dt) * 4 | 0)) this._ev('defusing', { a: actor.id });
     actor.intent.fwd = 0; actor.intent.side = 0;
     if (df.t >= 5) {
-      this.bombMesh.visible = false;
       this.bomb = null;
       df.actor = null; df.t = 0;
       actor.score += 150;
-      audio.bomb('defused');
+      this._ev('defused', { a: actor.id });
       this._endRound('blue', 'BOMBE ENTSCHÄRFT');
     }
   }
 
   /** Keine Respawns waehrend der Runde */
   blocksRespawn(actor) { return this.phase === 'live' || this.phase === 'end'; }
+
+  /** Spaeter Beitritt: bis zur naechsten Runde zuschauen */
+  setupLateActor(a) { a.respawnTimer = 99999; }
 
   interactionFor(actor) {
     if (this.phase !== 'live') return null;
@@ -808,11 +713,30 @@ export class SearchDestroyMode {
     if (this.bomb) out.push({ x: this.bomb.x, z: this.bomb.z, color: '#ff4444', label: '💣', big: true });
   }
 
-  dispose() {
-    const g = this.game;
-    for (const m of this.siteMeshes) { g.scene.remove(m); if (m.geometry) m.geometry.dispose(); if (m.material) { if (m.material.map) m.material.map.dispose(); m.material.dispose(); } }
-    g.scene.remove(this.bombMesh);
+  netState() {
+    const b = this.bomb;
+    return {
+      p: this.phase, t: r2(this.phaseT), n: this.round, rt: r2(this.roundTime),
+      b: b ? [this.sites.indexOf(b.site), r2(b.x), r2(b.y), r2(b.z), r2(b.t)] : null,
+      pl: this.plant.actor ? [this.plant.actor.id, r2(this.plant.t)] : null,
+      df: this.defuse.actor ? [this.defuse.actor.id, r2(this.defuse.t)] : null,
+      sw: this.swapped ? 1 : 0,
+    };
   }
+  applyNetState(s) {
+    if (!s) return;
+    const g = this.game;
+    this.phase = s.p; this.phaseT = s.t; this.round = s.n; this.roundTime = s.rt; this.swapped = !!s.sw;
+    if (s.b) {
+      if (!this.bomb) this.bomb = { site: this.sites[s.b[0]] || this.sites[0], x: s.b[1], y: s.b[2], z: s.b[3], t: s.b[4] };
+      else { this.bomb.t = s.b[4]; this.bomb.x = s.b[1]; this.bomb.y = s.b[2]; this.bomb.z = s.b[3]; }
+    } else this.bomb = null;
+    this.plant.actor = s.pl ? g.actorById(s.pl[0]) : null; this.plant.t = s.pl ? s.pl[1] : 0;
+    this.defuse.actor = s.df ? g.actorById(s.df[0]) : null; this.defuse.t = s.df ? s.df[1] : 0;
+    g.timeLeft = Math.max(0, this.phase === 'live' ? (this.bomb ? this.bomb.t : this.roundTime) : this.phaseT);
+  }
+
+  dispose() {}
 }
 
 export function createMode(id, game, mapDef, scoreLimit, timeLimit) {

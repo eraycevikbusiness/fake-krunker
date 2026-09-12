@@ -51,7 +51,7 @@ export class HUD {
       teamRed: document.querySelector('#matchbar .t-red'), teamBlue: document.querySelector('#matchbar .t-blue'),
       objHud: $('obj-hud'), objLine: $('obj-line'), objSub: $('obj-sub'),
       streaks: $('streaks'), board: $('ffa-board'), carry: $('carry-banner'),
-      prompt: $('prompt'), chat: $('chat'),
+      prompt: $('prompt'), chat: $('chat'), chatBox: $('chat-box'), chatInput: $('chat-input'), roomTag: $('room-tag'),
       replay: $('replay-bar'), rpTime: $('rp-time'), rpFill: $('rp-fill'), rpSpeed: $('rp-speed'), rpState: $('rp-state'),
     };
     this.chatItems = [];
@@ -82,7 +82,39 @@ export class HUD {
     }
   }
 
-  show(v) { this.el.hud.classList.toggle('hidden', !v); }
+  show(v) { this.el.hud.classList.toggle('hidden', !v); if (!v) this.closeChat(); }
+
+  // --------------------------------------------------------
+  // Chat-Eingabe (Online-Match)
+  // --------------------------------------------------------
+  get chatOpen() { return !!(this.el.chatBox && !this.el.chatBox.classList.contains('hidden')); }
+  openChat() {
+    const e = this.el;
+    if (!e.chatBox) return;
+    e.chatBox.classList.remove('hidden');
+    e.chatInput.value = '';
+    setTimeout(() => e.chatInput.focus(), 0);
+  }
+  closeChat() {
+    const e = this.el;
+    if (!e.chatBox) return;
+    e.chatBox.classList.add('hidden');
+    if (document.activeElement === e.chatInput) e.chatInput.blur();
+  }
+  /** Text aus der Eingabe holen und schliessen */
+  takeChat() {
+    const e = this.el;
+    const text = e.chatInput ? e.chatInput.value.trim() : '';
+    this.closeChat();
+    return text;
+  }
+  /** Raumcode-Anzeige (privater Raum) */
+  setRoomTag(code, priv) {
+    const e = this.el;
+    if (!e.roomTag) return;
+    e.roomTag.classList.toggle('hidden', !code);
+    if (code) e.roomTag.innerHTML = (priv ? 'PRIVATER RAUM ' : 'RAUM ') + '<b>' + escapeHtml(code) + '</b>';
+  }
 
   /** Setzt einen Textinhalt nur, wenn er sich geaendert hat */
   _txt(key, el, value) {
@@ -170,10 +202,19 @@ export class HUD {
       this._txt('mag', e.ammoMag, '∞');
       this._txt('res', e.ammoRes, '');
       this._cls('empty', e.ammo, 'empty', false);
+      this._cls('low', e.ammo, 'low', false);
     } else {
+      // Kurzer "Tick" der Zahl bei jedem Schuss
+      if (this._c.mag !== undefined && this._c.magN !== undefined && s.mag < this._c.magN && w === this._c.magW) {
+        e.ammoMag.classList.remove('tick');
+        void e.ammoMag.offsetWidth;
+        e.ammoMag.classList.add('tick');
+      }
+      this._c.magN = s.mag; this._c.magW = w;
       this._txt('mag', e.ammoMag, String(s.mag));
       this._txt('res', e.ammoRes, String(s.reserve));
       this._cls('empty', e.ammo, 'empty', s.mag <= 0);
+      this._cls('low', e.ammo, 'low', s.mag > 0 && s.mag <= Math.max(1, Math.round(w.mag * 0.25)));
     }
     const needReload = s.mag !== Infinity && s.mag <= 0 && s.reserve > 0 && p.reloadTimer <= 0;
     this._cls('rh', e.reloadHint, 'hidden', !needReload);
@@ -529,8 +570,9 @@ export class HUD {
 
     const rows = (list) => list.map((a) => {
       const pingCls = a.ping < 60 ? 'ping-good' : 'ping-bad';
+      const bot = a.isBot ? '<i class="bot">BOT</i>' : '';
       return `<div class="sb-row${a.isLocal ? ' me' : ''}${a.alive ? '' : ' dead'}">` +
-        `<span class="nm">${escapeHtml(a.name)}</span>` +
+        `<span class="nm">${bot}${escapeHtml(a.name)}</span>` +
         `<span>${a.kills}</span><span>${a.deaths}</span><span>${a.score}</span>` +
         `<span class="${pingCls}">${a.ping}</span></div>`;
     }).join('');

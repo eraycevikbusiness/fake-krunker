@@ -13,8 +13,14 @@ open_browser() {
 }
 
 if command -v node >/dev/null 2>&1; then
+  if [ ! -f node_modules/ws/package.json ]; then
+    echo
+    echo "  Installiere Abhaengigkeiten fuer den Mehrspieler-Server (einmalig) ..."
+    npm install --omit=dev --no-audit --no-fund
+  fi
   echo
   echo "  Starte FRAGSTORM ... der Browser oeffnet sich gleich."
+  echo "  Freunde im selben Netz: LAN-Adresse unten aufrufen und ONLINE SPIELEN druecken."
   echo "  Beenden mit Strg+C"
   echo
   exec node serve.mjs "$@"

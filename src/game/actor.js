@@ -90,11 +90,14 @@ let NEXT_ID = 1;
 export class Actor {
   constructor(game, opts) {
     this.game = game;
-    this.id = NEXT_ID++;
+    this.id = opts.id !== undefined ? opts.id : NEXT_ID++;
     this.name = opts.name || 'Player';
     this.team = opts.team || 'red';
     this.isBot = !!opts.isBot;
     this.isLocal = !!opts.isLocal;
+    this.isNet = false;             // Server: von einem Client gesteuerte Figur
+    this.isRemote = false;          // Client: Figur eines anderen Spielers (interpoliert)
+    this.pendingClassId = null;     // Klassenwechsel beim naechsten Spawn
 
     this.pos = { x: 0, y: 0, z: 0 };
     this.vel = { x: 0, y: 0, z: 0 };

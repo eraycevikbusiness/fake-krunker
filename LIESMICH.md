@@ -1,36 +1,105 @@
 # FRAGSTORM — Arena FPS im Browser
 
-Ein schneller Ego-Shooter im Blockstil, komplett im Browser.
-Keine Installation, keine Assets aus dem Netz, kein Build-Schritt.
-Läuft auf **Windows, Linux und macOS** in jedem aktuellen Browser
-(Chrome, Edge, Firefox, Safari).
+Ein schneller Ego-Shooter im Blockstil, komplett im Browser, **online
+gegen Freunde** oder offline gegen Bots. Keine Installation, keine Assets
+aus dem Netz, kein Build-Schritt. Läuft auf **Windows, Linux und macOS**
+in jedem aktuellen Browser (Chrome, Edge, Firefox, Safari).
 
 ## Starten
 
-Ein kleiner lokaler Webserver ist nötig, weil das Spiel aus ES-Modulen
-besteht (Browser blockieren Module über `file://`). Der Server öffnet den
-Browser automatisch auf <http://localhost:8080>.
+Ein kleiner Server ist nötig: er liefert das Spiel aus und betreibt
+gleichzeitig den Mehrspieler-Server. Er öffnet den Browser automatisch auf
+<http://localhost:8080>.
 
 | Plattform | So geht's |
 |---|---|
 | **Windows** | Doppelklick auf `START.bat` |
 | **macOS** | Doppelklick auf `start.command` (beim ersten Mal ggf. Rechtsklick → Öffnen) oder im Terminal `bash start.sh` |
 | **Linux** | Im Terminal `bash start.sh` (oder `./start.sh`) |
-| **Überall** | `node serve.mjs` bzw. `npm start` |
+| **Überall** | `npm install` (einmalig), dann `node serve.mjs` bzw. `npm start` |
 
-Voraussetzung ist [Node.js](https://nodejs.org) (Version 16 oder neuer).
-Fehlt Node.js, starten die Skripte automatisch einen Ersatz-Server mit
-Python 3, falls vorhanden.
+Voraussetzung ist [Node.js](https://nodejs.org) (Version 18 oder neuer).
+Die Startskripte installieren beim ersten Mal automatisch die zwei
+Abhängigkeiten (`ws` für WebSockets, `three` für die Server-Simulation).
+Fehlt Node.js, starten die Skripte einen Ersatz-Server mit Python 3, dann
+geht aber nur der Offline-Modus gegen Bots.
 
 Optionen für den Server:
 
 ```
-PORT=3000 node serve.mjs      # anderer Port
-node serve.mjs --no-open      # Browser nicht automatisch öffnen
-HOST=0.0.0.0 node serve.mjs   # im LAN erreichbar
+PORT=3000 node serve.mjs        # anderer Port
+node serve.mjs --no-open        # Browser nicht automatisch öffnen
+HOST=127.0.0.1 node serve.mjs   # nur auf diesem Rechner erreichbar (Standard: alle Adressen)
 ```
 
 Three.js liegt lokal unter `libs/`, das Spiel läuft also auch komplett offline.
+
+## Mehrspieler
+
+Im Menü auf **ONLINE SPIELEN** klicken: du landest sofort in einem
+laufenden Match. Freie Plätze füllt der Server mit Bots, jeder Mensch,
+der dazukommt, ersetzt einen Bot. Nach dem Match zeigt der Server zwölf
+Sekunden die Rangliste und startet das nächste, bei öffentlichen Räumen
+wechseln Modus, Karte und Wetter jedes Mal.
+
+Im Tab **ONLINE** gibt es außerdem:
+
+* die Liste der öffentlichen Räume mit Spielerzahl, Modus und Karte
+* **Raum eröffnen** mit eigenen Regeln: Modus (oder Rotation), Karte,
+  Wetter, Spielerzahl (der Rest sind Bots), Bot-Schwierigkeit, Punkte- und
+  Zeitlimit, optional **privat** (nur mit Raumcode erreichbar)
+* **Beitreten mit Code**: jeder Raum hat einen fünfstelligen Code, der im
+  Match unten rechts steht; der Link `http://<server>/?raum=CODE` führt
+  direkt hinein
+
+Im Match: `Enter` öffnet den Chat, `Tab` die Rangliste (Bots sind markiert,
+Ping steht dahinter), `Esc` öffnet das Pausenmenü, das Match läuft dabei
+weiter. Klasse, Aufsätze, Skins und Outfit lassen sich wie offline im
+Menü wechseln.
+
+**Freunde einladen**
+
+| Wo sind die Freunde? | Was tun |
+|---|---|
+| Im selben Netz (WLAN/LAN) | Server starten, die LAN-Adresse aus dem Serverfenster teilen (z. B. `http://192.168.1.20:8080`) |
+| Im Internet, Server zu Hause | Port 8080 im Router freigeben (Portweiterleitung auf deinen Rechner) und die öffentliche IP teilen |
+| Im Internet, ohne Router-Gefummel | Das Projekt auf einen kleinen Node-Host legen, siehe unten |
+
+**Hosting in der Cloud**
+
+Der Server ist ein einzelner Node-Prozess ohne Datenbank und liest `PORT`
+aus der Umgebung, damit läuft er unverändert auf Render, Railway, Fly.io,
+Glitch oder jedem VPS mit Node.js:
+
+* Startbefehl `npm start` (bzw. `node serve.mjs --no-open`), Build `npm install`
+* WebSockets müssen erlaubt sein (bei den genannten Diensten Standard)
+* Die Seite muss über HTTPS laufen, sobald sie nicht mehr `localhost` ist,
+  damit der Browser Pointer-Lock und WebSockets zulässt; die Dienste liefern
+  das Zertifikat mit, das Spiel wählt `wss://` dann automatisch
+* Ein `Dockerfile` liegt bei: `docker build -t fragstorm . && docker run -p 8080:8080 fragstorm`
+
+`/api/status` liefert Räume und Spielerzahl als JSON, `/healthz` antwortet
+mit `ok` (für Uptime-Checks).
+
+**Wie das Netz funktioniert**
+
+* Der Server rechnet das Match autoritativ: Bots, Leben, Schaden, Kills,
+  Punkte, Projektile, Pickups, liegende Waffen, Zerstörbares und die Modi
+  (Flaggen, Zone, Bombe, Infektion, Runden) laufen nur dort.
+* Die eigene Bewegung rechnet dein Browser selbst und schickt sie 30-mal pro
+  Sekunde, dadurch fühlt sich das Movement auch mit Ping direkt an. Andere
+  Spieler werden aus den Snapshots des Servers (20 pro Sekunde) mit 100 ms
+  Verzögerung interpoliert.
+* Treffer meldet der Client (wie in Krunker); der Server prüft Waffe,
+  Feuerrate, Entfernung, Sichtlinie und ob das Opfer gerade dort war, und
+  verteilt erst dann den Schaden. Trefferanzeige und Schadenszahlen
+  erscheinen trotzdem sofort.
+* Alles läuft über eine WebSocket-Verbindung mit JSON; ein Client empfängt
+  rund 20 KB/s.
+
+Dieselbe Simulation (`src/game/sim.js`) läuft offline im Browser und auf
+dem Server in Node.js, die Darstellung (`src/game/game.js`) hängt nur
+Ereignisse ab. Ein Headless-Test dafür: `node test/simtest.mjs`.
 
 **Tipp:** Im Menü oben rechts auf **VOLLBILD** klicken. Im Vollbild fängt das
 Spiel Browser-Kürzel wie `Strg+W` ab (Keyboard-Lock-API in Chrome/Edge).
@@ -334,6 +403,15 @@ speichern** lädt eine JSON-Datei herunter, **Replay laden** im Spielen-Tab
 spielt sie wieder ab (Karte und Wetter stecken in der Datei). Der
 Charakter-Tab spielt den gewählten Kill-Effekt direkt an der Figur ab.
 
+## Interface
+
+Das UI ist ein eigenes Design-System mit Glas-Panels, animierten
+Übergängen (Tabs, Karten, Toasts, Killfeed, Trefferanzeige, Endbildschirm)
+und vier Designs, umschaltbar unter Einstellungen → Interface:
+**Dunkel** (Standard), **Schwarz (OLED)**, **Neon** und **Hell**.
+Animationen und der Glas-Effekt lassen sich dort einzeln abschalten; das
+Spiel respektiert außerdem die Systemeinstellung „Bewegung reduzieren“.
+
 ## Barrierefreiheit und Touch
 
 * **Teamfarben:** Rot/Blau, Orange/Blau, Magenta/Cyan oder Gelb/Violett.
@@ -416,16 +494,27 @@ Klingenresonanz), Nachladen in drei Schritten, Nahkampf-Schwünge und -Treffer.
 index.html            Seitengerüst und HUD-Markup
 css/style.css         Gesamtes UI
 libs/three.module.js  Three.js (lokal, r160)
-serve.mjs             Mini-Webserver (Windows/Linux/macOS)
+serve.mjs             Webserver + Mehrspieler-Server (WebSocket /ws)
+server/
+  lobby.mjs           Verbindungen, Räume, Schnellbeitritt, Raumcodes
+  room.mjs            Ein Match-Raum: Tick-Schleife, Bots auffüllen, Snapshots, Match-Rotation
+  simserver.mjs       Autoritative Simulation, Prüfung der Client-Meldungen (Treffer, Schüsse)
+  netactor.mjs        Figur eines verbundenen Spielers auf dem Server
+Dockerfile            Container für Cloud-Hosting
 START.bat             Start unter Windows
 start.sh / .command   Start unter Linux / macOS
+test/simtest.mjs      Headless-Test der Simulation (Bots spielen alle Modi durch)
 src/
-  main.js             Einstiegspunkt, Spielschleife, Zustände, Auto-Auflösung, Replay-Wiedergabe
+  main.js             Einstiegspunkt, Spielschleife, Zustände, Online-Anbindung, Chat, Replay-Wiedergabe
+  net/
+    protocol.js       Nachrichtenformat, Zustandsbits, Packen der Snapshots (Client + Server)
+    client.js         WebSocket-Client, Nachrichtenbündelung, Ping
   core/               Eingabe, Audio, Einstellungen, Mathe-Helfer, Teamfarben (teams.js), Touch-Steuerung (touch.js)
   world/
     mapdata.js        Kartendefinitionen + Rampen-Validierung, Flaggen, Hardpoints, Zerstoerbares
     weather.js        Wetter und Tageszeit (Licht, Nebel, Laternen)
-    world.js          Geometrie, Kollision, Grid-Raycast, Navigation, zerstoerbare Collider
+    collision.js      Kollision, Grid-Raycast, Navigation, zerstörbare Collider (läuft auch auf dem Server)
+    world.js          Geometrie und Himmel (Client)
   fx/effects.js       Partikel, Tracer, Decals, Explosionen
   game/
     weapons.js        Waffen- und Klassendaten (inkl. Griffpunkte/Haltungen)
@@ -433,14 +522,17 @@ src/
     stickers.js       Waffen-Sticker (Canvas-Texturen, automatische Platzierung)
     cosmetics.js      Outfits, Kopfbedeckungen, Kill-Effekte, Kill-Icons
     training.js       Aim-Trainer (Drills, Zielscheiben, Bestwerte)
-    modes.js          Capture the Flag, Hardpoint, Gun Game, Infection, Search & Destroy (Regeln, Bot-Ziele, HUD)
+    modes.js          Capture the Flag, Hardpoint, Gun Game, Infection, Search & Destroy (Regeln, Bot-Ziele, Netzzustand)
+    modefx.js         Darstellung der Modi (Flaggen, Zone, Bombenplätze)
+    sim.js            Simulation ohne Darstellung: Match-Logik, Kampfsystem, Projektile, Pickups, Ereignisse
+    game.js           Darstellung: Renderer, Effekte, Sounds, HUD, Killcam, Replay, Online-Spiegel
     actor.js          Bewegungsphysik, Trefferzonen, Waffenlogik (gemeinsame Basis)
     player.js         Lokaler Spieler, Kamera, Rückstoß, Todeskamera
+    remote.js         Andere Spieler im Online-Match (Interpolation der Snapshots)
     bot.js            Bot-KI
     character.js      Spielerfiguren (verschmolzene Meshes, Arm-IK)
     viewmodel.js      Waffenansicht (Haltungen, Schlaganimationen)
-    game.js           Match-Logik, Kampfsystem, Projektile
-  ui/                 HUD, Menü, Minimap, Fadenkreuz-Renderer, 3D-Vorschauen
+  ui/                 HUD, Menü (inkl. Online-Tab), Minimap, Fadenkreuz-Renderer, 3D-Vorschauen
 ```
 
 ## Anpassen

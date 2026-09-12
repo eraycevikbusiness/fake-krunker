@@ -59,6 +59,8 @@
   <div id="prompt" class="hidden"><b>E</b> SEILBAHN</div>
   <div id="chat"></div>
   <div id="carry-banner" class="hidden">DU TR&Auml;GST DIE FLAGGE &middot; ZUR&Uuml;CK ZUR BASIS</div>
+  <div id="chat-box" class="hidden"><span class="chat-label">CHAT</span><input id="chat-input" type="text" maxlength="120" autocomplete="off" spellcheck="false" placeholder="Nachricht ... (Enter senden, Esc abbrechen)" /></div>
+  <div id="room-tag" class="hidden"></div>
 
   <div id="hud-br">
     <div id="dash-ind" class="hidden"><b>E</b> DASH<div class="dash-bar"><div id="dash-fill"></div></div></div>
@@ -118,7 +120,7 @@
 
 <!-- ================= MAIN MENU ================= -->
 <div id="menu" class="overlay hidden">
-  <div class="menu-bg"></div>
+  <div class="menu-bg"><div class="menu-grid"></div></div>
   <div class="menu-inner">
     <div class="menu-top">
       <button id="btn-fullscreen" class="icon-btn" title="Vollbild (empfohlen: faengt Strg+W ab)">&#x26F6; VOLLBILD</button>
@@ -127,6 +129,7 @@
 
     <div class="menu-tabs">
       <button class="tab active" data-tab="play">SPIELEN</button>
+      <button class="tab" data-tab="online">ONLINE</button>
       <button class="tab" data-tab="class">KLASSEN</button>
       <button class="tab" data-tab="skins">SKINS</button>
       <button class="tab" data-tab="char">CHARAKTER</button>
@@ -180,9 +183,78 @@
           <input id="opt-time" type="range" min="3" max="20" value="10" />
         </div>
       </div>
-      <button id="btn-play" class="big-btn">SPIEL STARTEN</button>
+      <div class="play-btns">
+        <button id="btn-play" class="big-btn">GEGEN BOTS SPIELEN</button>
+        <button id="btn-online-quick" class="big-btn online">ONLINE SPIELEN</button>
+      </div>
+      <p id="online-hint" class="dim tip" style="margin:6px 0 0;text-align:center">Online: sofort in ein laufendes Match mit anderen Spielern, leere Pl&auml;tze f&uuml;llen Bots.</p>
       <button id="btn-replay-load" class="small-btn">REPLAY LADEN (.json)</button>
       <input id="replay-file" type="file" accept=".json,application/json" class="hidden" />
+    </div>
+
+    <div class="tabpane" id="pane-online">
+      <div class="online-head">
+        <div id="online-status" class="dim">Nicht verbunden</div>
+        <button id="btn-online-refresh" class="small-btn">AKTUALISIEREN</button>
+      </div>
+      <div class="online-grid">
+        <div class="pcard">
+          <div class="cos-head">SCHNELL BEITRETEN</div>
+          <p class="dim tip" style="margin:6px 0 10px">Tritt dem vollsten &ouml;ffentlichen Match bei. Gibt es keins, wird eins er&ouml;ffnet. Modus, Karte und Wetter wechseln nach jedem Match.</p>
+          <button id="btn-online-quick2" class="big-btn online">SCHNELL BEITRETEN</button>
+          <div class="cos-head" style="margin-top:18px">MIT CODE BEITRETEN</div>
+          <div class="code-row">
+            <input id="online-code" type="text" maxlength="5" placeholder="RAUMCODE" autocomplete="off" spellcheck="false" />
+            <button id="btn-online-join" class="small-btn">BEITRETEN</button>
+          </div>
+          <div class="cos-head" style="margin-top:18px">&Ouml;FFENTLICHE R&Auml;UME</div>
+          <div id="room-list" class="room-list"><div class="dim">Keine Verbindung</div></div>
+        </div>
+        <div class="pcard">
+          <div class="cos-head">EIGENEN RAUM ER&Ouml;FFNEN</div>
+          <label>SPIELMODUS</label>
+          <select id="on-mode">
+            <option value="rotate">Rotation (wechselt jedes Match)</option>
+            <option value="tdm">Team Deathmatch</option>
+            <option value="ffa">Free For All</option>
+            <option value="gungame">Gun Game</option>
+            <option value="ctf">Capture the Flag</option>
+            <option value="hardpoint">Hardpoint</option>
+            <option value="infection">Infection</option>
+            <option value="sd">Search &amp; Destroy</option>
+          </select>
+          <label>KARTE</label>
+          <select id="on-map">
+            <option value="rotate">Rotation</option>
+            <option value="sandstorm">Sandstorm</option>
+            <option value="burg">Burg</option>
+            <option value="citadel">Citadel</option>
+            <option value="hafen">Hafen</option>
+            <option value="dschungel">Dschungel</option>
+          </select>
+          <label>WETTER / TAGESZEIT</label>
+          <select id="on-weather">
+            <option value="rotate">Rotation</option>
+            <option value="clear">Klar</option>
+            <option value="dusk">Abend</option>
+            <option value="rain">Regen</option>
+            <option value="fog">Nebel</option>
+            <option value="night">Nacht (Laternen)</option>
+            <option value="storm">Gewitternacht</option>
+          </select>
+          <label>SPIELER INSGESAMT <b id="lbl-on-players">8</b> <span class="dim">(Rest sind Bots)</span></label>
+          <input id="on-players" type="range" min="2" max="16" value="8" />
+          <label>BOT-SCHWIERIGKEIT <b id="lbl-on-diff">Normal</b></label>
+          <input id="on-diff" type="range" min="0" max="3" value="1" />
+          <label>PUNKTELIMIT <b id="lbl-on-limit">40</b></label>
+          <input id="on-limit" type="range" min="10" max="100" step="5" value="40" />
+          <label>ZEITLIMIT <b id="lbl-on-time">8 min</b></label>
+          <input id="on-time" type="range" min="3" max="20" value="8" />
+          <label class="check-row"><input id="on-private" type="checkbox" /> <span>Privat (nur mit Raumcode)</span></label>
+          <button id="btn-online-create" class="big-btn online">RAUM ER&Ouml;FFNEN</button>
+        </div>
+      </div>
+      <p class="dim tip" style="margin-top:14px">Freunde einladen: Adresse dieses Servers teilen. In einem privaten Raum zeigt das HUD den Code, der Link <b>?raum=CODE</b> f&uuml;hrt direkt hinein. Im Match: <b>Enter</b> = Chat.</p>
     </div>
 
     <div class="tabpane" id="pane-class">
@@ -271,6 +343,7 @@
         <div><kbd>WAND</kbd><span>Wandlauf: schr&auml;g an eine Wand springen (Agent, Ninja) &middot; Leertaste = Wandsprung</span></div>
         <div><kbd>G</kbd><span>Granate werfen</span></div>
         <div><kbd>TAB</kbd><span>Rangliste</span></div>
+        <div><kbd>ENTER</kbd><span>Chat (Online-Match)</span></div>
         <div><kbd>ESC</kbd><span>Pause / Men&uuml;</span></div>
         <div><kbd>V</kbd><span>Kamera: 1st / 3rd Person</span></div>
         <div><kbd>P</kbd><span>Performance-Anzeige</span></div>
@@ -280,6 +353,10 @@
     </div>
 
     <button id="btn-back-game" class="small-btn hidden">&larr; ZUR&Uuml;CK ZUM SPIEL</button>
+    <div class="menu-foot">
+      <span><i class="dot"></i><b>FRAGSTORM</b> v3 &middot; Arena-FPS im Browser</span>
+      <span>Vollbild empfohlen &middot; <b>Esc</b> Pause &middot; <b>Tab</b> Rangliste &middot; <b>Enter</b> Chat</span>
+    </div>
   </div>
 </div>
 
@@ -287,6 +364,7 @@
 <div id="pause" class="overlay hidden">
   <div class="pause-card">
     <h2>PAUSE</h2>
+    <p id="pause-online" class="dim tip hidden" style="margin:-2px 0 10px">Online-Match: das Spiel l&auml;uft weiter.</p>
     <button id="btn-resume" class="big-btn">WEITERSPIELEN</button>
     <button id="btn-class-ingame" class="small-btn">KLASSE WECHSELN</button>
     <button id="btn-settings-ingame" class="small-btn">EINSTELLUNGEN</button>
@@ -311,6 +389,7 @@
     <div id="end-sub"></div>
     <div id="end-board"></div>
     <div class="end-btns">
+      <div id="end-next" class="hidden">N&auml;chstes Match in <b>12</b> s &hellip;</div>
       <button id="btn-again" class="big-btn">NOCHMAL SPIELEN</button>
       <div class="end-row">
         <button id="btn-replay" class="small-btn">&#9654; REPLAY ANSEHEN</button>

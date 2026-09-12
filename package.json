@@ -1,14 +1,19 @@
 {
   "name": "fragstorm",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "private": true,
   "type": "module",
-  "description": "FRAGSTORM - Browser-Arena-FPS mit Bots, Waffen und Klassen (Windows, Linux, macOS)",
+  "description": "FRAGSTORM - Browser-Arena-FPS mit Mehrspieler, Bots, Waffen und Klassen (Windows, Linux, macOS)",
   "scripts": {
     "start": "node serve.mjs",
-    "serve": "node serve.mjs --no-open"
+    "serve": "node serve.mjs --no-open",
+    "test:sim": "node test/simtest.mjs"
   },
   "engines": {
-    "node": ">=16"
+    "node": ">=18"
+  },
+  "dependencies": {
+    "three": "^0.160.0",
+    "ws": "^8.21.3"
   }
 }

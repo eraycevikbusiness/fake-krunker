@@ -80,8 +80,8 @@ const BOT_SECOND = [
 const BOT_SUFFIX = ['', '', '', '', 'Xx', '69', '99', '_TTV', '_YT', '007', '2000', 'z', '1337'];
 
 /** Liefert n eindeutige, krunker-typische Bot-Namen */
-export function makeBotNames(n) {
-  const used = new Set();
+export function makeBotNames(n, exclude) {
+  const used = new Set(exclude || []);
   const out = [];
   let guard = 0;
   while (out.length < n && guard++ < 2000) {

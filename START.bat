@@ -23,8 +23,16 @@ if errorlevel 1 (
   exit /b 0
 )
 
+if not exist "node_modules\ws\package.json" (
+  echo.
+  echo   Installiere Abhaengigkeiten fuer den Mehrspieler-Server ^(einmalig^) ...
+  echo.
+  call npm install --omit=dev --no-audit --no-fund
+)
+
 echo.
 echo   Starte FRAGSTORM ... der Browser oeffnet sich gleich.
+echo   Freunde im selben Netz: die LAN-Adresse unten aufrufen und ONLINE SPIELEN druecken.
 echo   Zum Beenden dieses Fenster schliessen oder Strg+C druecken.
 echo.
 
